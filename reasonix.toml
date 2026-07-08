@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash(cd \"C:\\Users\\Administrator\\Desktop\\vibe\" && git init)", "Bash(cd \"C:\\Users\\Administrator\\Desktop\\vibe\" && git add -A && git commit -m \"纯白直线 · 亮段爬行动画\n\n一条纯白直线，亮段在线条上平滑移动，模拟光流效果。\n- 无粒子、无辉光、无渐变线体\n- 基底 12% 白 + 亮段峰值 100% 白\n- clearRect 完全清屏，每帧重绘\")", "Bash(cd \"C:\\Users\\Administrator\\Desktop\\vibe\" && git config user.email \"user@example.com\" && git config user.name \"user\")"]
