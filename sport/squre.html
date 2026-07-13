@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>square</title>
+</head>
+<style>
+    body{
+        background-color:black;
+        margin: 0;
+        overflow: hidden;
+    }
+    canvas {
+        display: block;
+    }
+</style>
+<body>
+<canvas id="c"></canvas>
+</body>
+<script>
+    const c = document.getElementById("c");
+    const ctx = c.getContext("2d");
+    c.width = innerWidth;
+    c.height = innerHeight;
+
+    const param = 10;       // 整体粒子尺寸
+    const step = 2;        // 粒子密度
+    let frame = 0;         // 帧计数
+    let doex = 0;
+    let doey = 25;          // 粒子生成轨迹函数
+    let width = 10;        // 整体粒子宽度
+    let height = 10;        // 整体粒子高度
+    let offsets = [];      // 粒子偏移量
+    let framecount = 50    // 粒子变化频率
+
+    function animate() {
+        frame++;
+        doex = doex +0.1
+        // 蒙版
+        ctx.fillStyle = 'rgba(0,0,0,1)';
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        // 合成粒子
+        if (frame % framecount === 1) {
+            offsets = [];
+            for (let x = doex; x < doex + width; x += step)
+                for (let y = doey; y < doey + height; y += step)
+                    offsets.push([
+                        Math.floor(Math.random() * 2 * param),
+                        Math.floor(Math.random() * 2 * param)
+                    ]);
+        }
+
+        // 每帧随机生成像素粒子动态关键
+        const size = 2 * param + Math.floor(Math.random() * 2 * param);
+        //const size = 3 * param
+
+        // 粒子偏移
+        ctx.fillStyle = '#fff';
+        let i = 0;
+        for (let x = doex; x < doex + width; x += step) {
+            for (let y = doey; y < doey + height; y += step) {
+                const [dx, dy] = offsets[i++] || [0, 0];
+                ctx.fillRect(x * param + dx, y * param + dy, size, size);
+            }
+        }
+        requestAnimationFrame(animate);
+    }
+    animate();
+</script>
+</html>

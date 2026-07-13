@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>square</title>
+</head>
+<style>
+    body{
+        background-color:black;
+        margin: 0;
+        overflow: hidden;
+    }
+    canvas {
+        display: block;
+    }
+</style>
+<body>
+<canvas id="c"></canvas>
+</body>
+<script>
+    const c = document.getElementById("c");
+    const ctx = c.getContext("2d");
+    c.width = innerWidth;
+    c.height = innerHeight;
+
+    const S = 10;              // 粒子尺寸
+    const STEP = 2;            // 粒子密度
+    const OX = 40, OY = 40;    // 网格原点
+    const COLS = 13;           // 列数 = width/STEP
+    const ROWS = 4;            // 行数 = height/STEP
+
+    let pts = [];              // [{dx, dy, s}]
+    let mx = -100, my = -100;
+    let pressing = false, press = 1;
+    let rings = [];
+
+    c.onmousemove = e => {
+        const r = c.getBoundingClientRect();
+        mx = e.clientX - r.left;
+        my = e.clientY - r.top;
+    };
+    c.onmousedown = e => {
+        pressing = true;
+        const r = c.getBoundingClientRect();
+        rings.push({ x: e.clientX - r.left, y: e.clientY - r.top, r: 0, a: .8 });
+    };
+    c.onmouseup = () => pressing = false;
+    c.onclick = () => pts = [];
+
+    function gen() {
+        pts = [];
+        for (let i = 0; i < COLS * ROWS; i++)
+            pts.push({
+                dx: Math.random() * 2 * S | 0,
+                dy: Math.random() * 2 * S | 0,
+                s: 2 * S + Math.random() * 2 * S | 0
+            });
+    }
+
+    (function loop() {
+        press += ((pressing ? .4 : 1) - press) * .25;
+
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        // 波纹
+        for (let r of rings) {
+            ctx.strokeStyle = `rgba(255,255,255,${r.a})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2); ctx.stroke();
+            r.r += 5; r.a -= .04;
+        }
+        rings = rings.filter(r => r.a > 0);
+
+        if (!pts.length) gen();
+
+        // 单次遍历：检测悬停 + 绘制
+        let near = Infinity;
+        ctx.fillStyle = '#fff';
+        for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const px = (OX + (i % COLS) * STEP) * S + p.dx;
+            const py = (OY + (i / COLS | 0) * STEP) * S + p.dy;
+            const d = (mx - px - p.s / 2) ** 2 + (my - py - p.s / 2) ** 2;
+            if (d < near) near = d;
+            const sz = p.s * press;
+            ctx.fillRect(px - (sz - p.s) / 2, py - (sz - p.s) / 2, sz, sz);
+        }
+
+        if (near < 2500) pts.forEach(p => p.s = 2 * S + Math.random() * 2 * S | 0);
+
+        requestAnimationFrame(loop);
+    })();
+</script>
+</html>
