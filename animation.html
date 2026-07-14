@@ -1,138 +1,418 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>网页动画实验室</title>
-    <style>
-        /* ===== 全局重置 ===== */
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>任意线条·流光爬行</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
-        body {
-            background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            font-family: 'Segoe UI', sans-serif;
-            overflow: hidden;
-        }
+body {
+  background: #08080c;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
 
-        /* ===== Canvas 画布 ===== */
-        #canvas {
-            display: block;
-            background: #000;
-            border-radius: 12px;
-            box-shadow: 0 0 60px rgba(255, 180, 30, 0.08);
-        }
+canvas {
+  display: block;
+  border-radius: 12px;
+  background: #0a0a10;
+  box-shadow: 0 0 60px rgba(255, 180, 30, 0.04);
+}
 
-        /* ===== CSS 动画容器（备选） ===== */
-        .scene {
-            display: none;
-            position: relative;
-            width: 800px;
-            height: 600px;
-            border-radius: 12px;
-            background: #000;
-            overflow: hidden;
-        }
-    </style>
+/* 路径选择器 */
+.toolbar {
+  position: fixed;
+  top: 16px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 10;
+}
+
+.toolbar button {
+  padding: 6px 14px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.toolbar button:hover    { background: rgba(255,255,255,0.12); color: #fff; }
+.toolbar button.active   { background: rgba(255,180,30,0.18); border-color: rgba(255,180,30,0.5); color: #ffb832; }
+</style>
 </head>
 <body>
 
-    <!-- === Canvas 主画布 === -->
-    <canvas id="canvas" width="800" height="600"></canvas>
+<div class="toolbar" id="toolbar"></div>
+<canvas id="canvas" width="800" height="600"></canvas>
 
-    <!-- === CSS 动画场景（备用） === -->
-    <div class="scene" id="scene"></div>
+<script>
+// ============================================================
+//  任意线条·流光爬行 — 通用流光线引擎
+// ============================================================
 
-    <script>
-        // ============================================================
-        //  纯白直线 · 亮段爬行  —  Pure White Line, Segment Lighting
-        // ============================================================
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
 
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const W = 800, H = 600;
-        const LINE_Y = H / 2;
-        const LINE_W = 2.5;
+function resize() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H, 1.1);
+  canvas.style.width  = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
 
-        function resize() {
-            const scale = Math.min(window.innerWidth / W, window.innerHeight / H, 1.2);
-            canvas.style.width = (W * scale) + 'px';
-            canvas.style.height = (H * scale) + 'px';
-        }
-        window.addEventListener('resize', resize);
-        resize();
+// ============================================================
+//  通用路径类 — 任意线条都可以用
+// ============================================================
+class Path {
+  /**
+   * @param {Array<{x:number, y:number}>} points — 采样点数组
+   */
+  constructor(points) {
+    this.points = points;
+    this.segments = [];
+    let cum = 0;
+    for (let i = 1; i < points.length; i++) {
+      const dx = points[i].x - points[i-1].x;
+      const dy = points[i].y - points[i-1].y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-9) continue; // 跳过零长度
+      cum += len;
+      this.segments.push({
+        p0: points[i-1],
+        p1: points[i],
+        start: cum - len,
+        end: cum
+      });
+    }
+    this.totalLen = cum;
+  }
 
-        // ============================================================
-        //  光流 — 亮区中心沿直线移动
-        // ============================================================
-        const light = {
-            x: -80,
-            speed: 2.2,
-            direction: 1,
-            segmentLen: 140,     // 亮段长度 (px)
-
-            update(dt) {
-                this.x += this.speed * this.direction * dt * 0.12;
-                if (this.x > W + this.segmentLen) this.direction = -1;
-                if (this.x < -this.segmentLen)    this.direction = 1;
-            }
+  /** 沿路径行走 distance 距离，返回对应的 (x, y) */
+  getPoint(distance) {
+    if (this.segments.length === 0) return this.points[0] || {x:0, y:0};
+    for (const seg of this.segments) {
+      if (distance <= seg.end || seg === this.segments[this.segments.length-1]) {
+        const t = (distance - seg.start) / (seg.end - seg.start);
+        const ct = Math.max(0, Math.min(1, t));
+        return {
+          x: seg.p0.x + (seg.p1.x - seg.p0.x) * ct,
+          y: seg.p0.y + (seg.p1.y - seg.p0.y) * ct
         };
+      }
+    }
+    const last = this.segments[this.segments.length-1];
+    return last.p1;
+  }
+}
 
-        // ============================================================
-        //  绘制 — 暗基底 + 亮段渐变叠加
-        // ============================================================
-        function drawLine() {
-            const half = light.segmentLen / 2;
-            const x0 = light.x - half;
-            const x1 = light.x + half;
+// ============================================================
+//  路径工厂 — 生成各种形状的采样点
+// ============================================================
 
-            // 基底暗线（全段可见）
-            ctx.save();
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-            ctx.lineWidth = LINE_W;
-            ctx.beginPath();
-            ctx.moveTo(0, LINE_Y);
-            ctx.lineTo(W, LINE_Y);
-            ctx.stroke();
-            ctx.restore();
+// 三次贝塞尔采样
+function sampleBezier(x0, y0, x1, y1, x2, y2, x3, y3, samples) {
+  const pts = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples, u = 1 - t;
+    const x = u*u*u*x0 + 3*u*u*t*x1 + 3*u*t*t*x2 + t*t*t*x3;
+    const y = u*u*u*y0 + 3*u*u*t*y1 + 3*u*t*t*y2 + t*t*t*y3;
+    pts.push({x, y});
+  }
+  return pts;
+}
 
-            // 亮段叠加（渐变范围随光移动）
-            const grad = ctx.createLinearGradient(x0, LINE_Y, x1, LINE_Y);
-            grad.addColorStop(0.0,  'rgba(255, 255, 255, 0.12)');
-            grad.addColorStop(0.15, 'rgba(255, 255, 255, 0.4)');
-            grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.85)');
-            grad.addColorStop(0.5,  'rgba(255, 255, 255, 1.0)');
-            grad.addColorStop(0.65, 'rgba(255, 255, 255, 0.85)');
-            grad.addColorStop(0.85, 'rgba(255, 255, 255, 0.4)');
-            grad.addColorStop(1.0,  'rgba(255, 255, 255, 0.12)');
+// 圆弧采样
+function sampleArc(cx, cy, r, a0, a1, samples) {
+  const pts = [];
+  for (let i = 0; i <= samples; i++) {
+    const a = a0 + (a1 - a0) * i / samples;
+    pts.push({x: cx + r * Math.cos(a), y: cy + r * Math.sin(a)});
+  }
+  return pts;
+}
 
-            ctx.save();
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = LINE_W;
-            ctx.beginPath();
-            ctx.moveTo(0, LINE_Y);
-            ctx.lineTo(W, LINE_Y);
-            ctx.stroke();
-            ctx.restore();
-        }
+// ============================================================
+//  预设路径集
+// ============================================================
+const CX = W / 2, CY = H / 2;
 
-        // ============================================================
-        //  循环
-        // ============================================================
-        let lastTime = 0;
-        function loop(timestamp) {
-            const dt = Math.min(timestamp - lastTime, 32);
-            lastTime = timestamp;
-            light.update(dt);
-            ctx.clearRect(0, 0, W, H);
-            drawLine();
-            requestAnimationFrame(loop);
-        }
-        requestAnimationFrame(loop);
-    </script>
+function makePaths() {
+  const paths = [];
 
+  // --- 0: 水平直线 ---
+  paths.push({
+    name: '直线',
+    path: new Path([
+      {x: 80, y: CY},
+      {x: W-80, y: CY}
+    ])
+  });
+
+  // --- 1: 圆 ---
+  paths.push({
+    name: '圆环',
+    path: new Path(sampleArc(CX, CY, 220, 0, Math.PI * 2, 360))
+  });
+
+  // --- 2: 正弦波 ---
+  {
+    const pts = [];
+    for (let x = 60; x < W - 60; x += 2) {
+      const t = (x - 60) / (W - 120);
+      pts.push({x, y: CY + Math.sin(t * Math.PI * 4) * 140});
+    }
+    paths.push({ name: '正弦波', path: new Path(pts) });
+  }
+
+  // --- 3: 心形 ---
+  {
+    const pts = sampleArc(0, 0, 1, 0, Math.PI * 2, 400);
+    const heart = pts.map(({x: cx, y: cy}) => {
+      // 心形参数方程
+      const t = Math.atan2(cy, cx) + Math.PI;
+      const r = Math.sqrt(cx*cx + cy*cy);
+      const hx = 16 * Math.pow(Math.sin(t), 3);
+      const hy = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+      return { x: CX + hx * 16, y: CY - hy * 16 };
+    });
+    const unique = [];
+    for (const h of heart) {
+      // 去重
+      if (unique.length === 0 || Math.hypot(h.x - unique[unique.length-1].x, h.y - unique[unique.length-1].y) > 2) {
+        unique.push(h);
+      }
+    }
+    paths.push({ name: '心形', path: new Path(unique) });
+  }
+
+  // --- 4: 五角星 ---
+  {
+    const pts = [];
+    const outerR = 200, innerR = 80;
+    for (let i = 0; i <= 10; i++) {
+      const angle = i * Math.PI / 5 - Math.PI / 2;
+      const r = i % 2 === 0 ? outerR : innerR;
+      pts.push({x: CX + r * Math.cos(angle), y: CY + r * Math.sin(angle)});
+    }
+    paths.push({ name: '五角星', path: new Path(pts) });
+  }
+
+  // --- 5: 螺旋线 ---
+  {
+    const pts = [];
+    for (let a = 0; a < Math.PI * 6; a += 0.05) {
+      const r = 30 + a * 28;
+      pts.push({x: CX + r * Math.cos(a), y: CY + r * Math.sin(a)});
+    }
+    paths.push({ name: '螺旋', path: new Path(pts) });
+  }
+
+  // --- 6: ∞ 双纽线 ---
+  {
+    const pts = [];
+    for (let a = 0; a <= Math.PI * 2; a += 0.02) {
+      const s = Math.sin(a), c = Math.cos(a);
+      const denom = 1 + s * s;
+      const x = CX + 200 * c / denom;
+      const y = CY + 200 * s * c / denom;
+      pts.push({x, y});
+    }
+    paths.push({ name: '∞ 双纽线', path: new Path(pts) });
+  }
+
+  // --- 7: 矩形圆角 ---
+  {
+    const r = 60, x0 = CX - 260, x1 = CX + 260, y0 = CY - 160, y1 = CY + 160;
+    const pts = [];
+    // top edge
+    for (let x = x0 + r; x <= x1 - r; x += 4) pts.push({x, y: y0});
+    // top-right corner
+    pts.push(...sampleArc(x1 - r, y0 + r, r, -Math.PI/2, 0, 20));
+    // right edge
+    for (let y = y0 + r; y <= y1 - r; y += 4) pts.push({x: x1, y});
+    // bottom-right corner
+    pts.push(...sampleArc(x1 - r, y1 - r, r, 0, Math.PI/2, 20));
+    // bottom edge
+    for (let x = x1 - r; x >= x0 + r; x -= 4) pts.push({x, y: y1});
+    // bottom-left corner
+    pts.push(...sampleArc(x0 + r, y1 - r, r, Math.PI/2, Math.PI, 20));
+    // left edge
+    for (let y = y1 - r; y >= y0 + r; y -= 4) pts.push({x: x0, y});
+    // top-left corner
+    pts.push(...sampleArc(x0 + r, y0 + r, r, Math.PI, -Math.PI/2, 20));
+    paths.push({ name: '圆角矩形', path: new Path(pts) });
+  }
+
+  return paths;
+}
+
+const paths = makePaths();
+
+// ============================================================
+//  流光引擎 — 通用的亮段爬行器
+// ============================================================
+class LightCrawler {
+  /**
+   * @param {Path} path
+   * @param {Object} opts
+   */
+  constructor(path, opts = {}) {
+    this.path = path;
+    this.total = path.totalLen;
+
+    this.segmentLen = opts.segmentLen || 140;      // 亮段长度 (沿路径距离)
+    this.speed      = opts.speed      || 120;       // 爬行速度 (px/s)
+    this.baseAlpha  = opts.baseAlpha  || 0.12;      // 基底不透明度
+    this.peakAlpha  = opts.peakAlpha  || 0.88;      // 亮段峰值不透明度
+    this.lineWidth  = opts.lineWidth  || 2.5;       // 线宽
+    this.hue        = opts.hue        || 42;        // 金色调
+
+    this.distance = Math.random() * this.total;     // 当前沿路径距离
+    this.dir = opts.dir != null ? opts.dir : (Math.random() < 0.5 ? 1 : -1);
+  }
+
+  update(dtSec) {
+    this.distance += this.speed * this.dir * dtSec;
+    if (this.distance > this.total) this.distance -= this.total;
+    if (this.distance < 0) this.distance += this.total;
+  }
+
+  draw(ctx) {
+    const half = this.segmentLen / 2;
+    const d0 = this.distance - half;
+    const d1 = this.distance + half;
+
+    // ---- 基底暗线 ----
+    ctx.save();
+    ctx.strokeStyle = `hsla(${this.hue}, 90%, 55%, ${this.baseAlpha})`;
+    ctx.lineWidth = this.lineWidth;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const p0 = this.path.getPoint(0);
+    ctx.moveTo(p0.x, p0.y);
+    const step = Math.max(1, this.total / 300);
+    for (let d = step; d <= this.total; d += step) {
+      const p = this.path.getPoint(d);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // ---- 亮段：沿路径逐段绘制 Gaussian 渐变 ----
+    const segCount = 60;
+    const segStep = (d1 - d0) / segCount;
+
+    for (let i = 0; i < segCount; i++) {
+      const sd = d0 + i * segStep;
+      const ed = sd + segStep;
+
+      // 跳过完全不与路径重叠的段
+      if (ed < 0 || sd > this.total) continue;
+
+      const mid = (sd + ed) / 2;
+      const distFromCenter = Math.abs(mid - this.distance) / half;
+      const raw = 1 - Math.min(distFromCenter, 1);
+      // Smoothstep 缓入缓出
+      const t = raw * raw * (3 - 2 * raw);
+
+      const alpha = this.baseAlpha + (this.peakAlpha - this.baseAlpha) * t;
+      // lightness: 25% → peak (颜色从暗金渐变为亮金)
+      const light = 25 + (82 - 25) * t;
+
+      const pA = this.path.getPoint(sd);
+      const pB = this.path.getPoint(ed);
+
+      ctx.save();
+      ctx.strokeStyle = `hsla(${this.hue}, 90%, ${light}%, ${alpha})`;
+      ctx.lineWidth = this.lineWidth;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pA.x, pA.y);
+      ctx.lineTo(pB.x, pB.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // ---- 亮段中心光点 ----
+    const cp = this.path.getPoint(this.distance);
+    ctx.save();
+    const g = ctx.createRadialGradient(cp.x, cp.y, 0, cp.x, cp.y, 18);
+    g.addColorStop(0,   `hsla(${this.hue}, 100%, 95%, 0.45)`);
+    g.addColorStop(0.3, `hsla(${this.hue}, 100%, 75%, 0.12)`);
+    g.addColorStop(1,   `hsla(${this.hue}, 100%, 60%, 0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cp.x, cp.y, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ============================================================
+//  场景 — 管理多个路径 + 爬行器
+// ============================================================
+let currentIdx = 0;
+let crawler = null;
+
+function loadPath(idx) {
+  currentIdx = idx;
+  const { path } = paths[idx];
+  // 3 个爬行器，不同速度和相位
+  crawler = [
+    new LightCrawler(path, { segmentLen: 130, speed: 100, hue: 42 }),      // 主金
+    new LightCrawler(path, { segmentLen: 80,  speed: 160, hue: 46, baseAlpha: 0.06, peakAlpha: 0.7 }),  // 亮金快追
+    new LightCrawler(path, { segmentLen: 200, speed: 60,  hue: 38, baseAlpha: 0.06, peakAlpha: 0.55 }),  // 暗金慢扫
+  ];
+}
+
+loadPath(0);
+
+// ============================================================
+//  工具栏
+// ============================================================
+const toolbar = document.getElementById('toolbar');
+paths.forEach(({name}, i) => {
+  const btn = document.createElement('button');
+  btn.textContent = name;
+  btn.className = i === 0 ? 'active' : '';
+  btn.addEventListener('click', () => {
+    toolbar.querySelectorAll('button').forEach(b => b.className = '');
+    btn.className = 'active';
+    loadPath(i);
+  });
+  toolbar.appendChild(btn);
+});
+
+// ============================================================
+//  主循环
+// ============================================================
+let lastTime = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  ctx.clearRect(0, 0, W, H);
+
+  for (const c of crawler) {
+    c.update(dt);
+    c.draw(ctx);
+  }
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>

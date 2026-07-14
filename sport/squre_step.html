@@ -6,17 +6,43 @@
     <title>square</title>
 </head>
 <style>
-    body{
-        background-color:black;
+    body {
+        background: #000;
         margin: 0;
         overflow: hidden;
     }
-    canvas {
-        display: block;
+    canvas { display: block; }
+
+    .button {
+        position: absolute;
+        left: 380px;
+        top:  380px;
+        padding: 14px 28px;
+        background: rgba(255,255,255,.05);
+        border: 1px solid rgba(255,255,255,.2);
+        border-radius: 6px;
+        color: #fff;
+        font-size: 15px;
+        letter-spacing: 4px;
+        cursor: pointer;
+        backdrop-filter: blur(3px);
+        transition: all .25s;
+        user-select: none;
+        outline: none;
+    }
+    .button:hover {
+        background: rgba(255,255,255,.1);
+        border-color: rgba(255,255,255,.5);
+        box-shadow: 0 0 24px rgba(255,255,255,.08);
+    }
+    .button:active {
+        transform: scale(.93);
+        background: rgba(255,255,255,.16);
     }
 </style>
 <body>
 <canvas id="c"></canvas>
+<button class="button">Button</button>
 </body>
 <script>
     const c = document.getElementById("c");
@@ -27,14 +53,17 @@
     const S = 10;              // 粒子尺寸
     const STEP = 2;            // 粒子密度
     const OX = 40, OY = 40;    // 网格原点
-    const COLS = 13;           // 列数 = width/STEP
-    const ROWS = 4;            // 行数 = height/STEP
+    const COLS = 13;           // 列数
+    const ROWS = 4;            // 行数
 
     let pts = [];              // [{dx, dy, s}]
     let mx = -100, my = -100;
     let pressing = false, press = 1;
     let rings = [];
 
+    const btn = document.querySelector(".button");
+
+    // ── 鼠标事件 ──
     c.onmousemove = e => {
         const r = c.getBoundingClientRect();
         mx = e.clientX - r.left;
@@ -46,8 +75,11 @@
         rings.push({ x: e.clientX - r.left, y: e.clientY - r.top, r: 0, a: .8 });
     };
     c.onmouseup = () => pressing = false;
-    c.onclick = () => pts = [];
 
+    // 按钮点击 → 重组粒子
+    btn.onclick = () => pts = [];
+
+    // ── 粒子生成 ──
     function gen() {
         pts = [];
         for (let i = 0; i < COLS * ROWS; i++)
@@ -58,6 +90,7 @@
             });
     }
 
+    // ── 动画循环 ──
     (function loop() {
         press += ((pressing ? .4 : 1) - press) * .25;
 
@@ -75,7 +108,7 @@
 
         if (!pts.length) gen();
 
-        // 单次遍历：检测悬停 + 绘制
+        // 检测悬停 + 绘制
         let near = Infinity;
         ctx.fillStyle = '#fff';
         for (let i = 0; i < pts.length; i++) {
