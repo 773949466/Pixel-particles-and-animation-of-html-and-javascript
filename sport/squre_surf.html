@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Square Wave Particles</title>
+    <style>
+        * { box-sizing: border-box; }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+<canvas id="c" aria-label="随机方块粒子波浪动画"></canvas>
+
+<script>
+    const c = document.getElementById('c');
+    const ctx = c.getContext('2d');
+
+    // 粒子大小参考 squre_step.html：S = 10，尺寸范围 20~39px。
+    // 粒子尺寸保持不变；缩小网格步长，让长方形波带更密集。
+    const param = 10;
+    const step = 2;
+    const framecount = 50;
+
+    let frame = 0;
+    let time = 0;
+    let viewportWidth = innerWidth;
+    let viewportHeight = innerHeight;
+    let offsets = [];
+    let wave = createWave();
+    let particleSize = 3 * param;
+    let targetParticleSize = particleSize;
+
+    function random(min, max) {
+        return min + Math.random() * (max - min);
+    }
+
+    // 每轮随机生成不同的波浪性格。
+    function createWave() {
+        return {
+            amplitude: random(16, 32),
+            frequency: random(0.005, 0.011),
+            speed: random(0.018, 0.035),
+            rows: Math.floor(random(5, 8)),
+            fillRows: Math.floor(random(2, 5)),
+            fillDensity: random(0.82, 0.94),
+            lengthRatio: random(0.34, 0.46),
+            phase: random(0, Math.PI * 2),
+            secondWave: random(0.08, 0.18),
+            direction: Math.random() < 0.5 ? -1 : 1
+        };
+    }
+
+    function resize() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        viewportWidth = innerWidth;
+        viewportHeight = innerHeight;
+        c.width = Math.round(viewportWidth * dpr);
+        c.height = Math.round(viewportHeight * dpr);
+        c.style.width = `${viewportWidth}px`;
+        c.style.height = `${viewportHeight}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        offsets = [];
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+    }
+
+    // 对应 squre.html 的“合成粒子”：顺序数组与波浪网格一一对应。
+    function composeParticles() {
+        offsets = [];
+        const spacing = step * param;
+        const segmentWidth = viewportWidth * wave.lengthRatio;
+        const startX = (viewportWidth - segmentWidth) / 2;
+        const endX = startX + segmentWidth;
+        let column = 0;
+
+        for (let x = startX; x <= endX; x += spacing) {
+            const totalRows = wave.rows + wave.fillRows;
+            for (let row = 0; row < totalRows; row++) {
+                const fillRow = row - wave.rows;
+                const hash = Math.abs(Math.sin(
+                    (column + 1) * 12.9898 + (fillRow + 1) * 78.233
+                ) * 43758.5453) % 1;
+                offsets.push({
+                    dx: Math.floor(Math.random() * 2 * param),
+                    dy: Math.floor(Math.random() * 2 * param),
+                    visible: fillRow < 0 || hash < wave.fillDensity
+                });
+            }
+            column++;
+        }
+    }
+
+    function animate() {
+        frame++;
+        time += wave.speed * wave.direction;
+
+        // 只衰减旧帧，不完全清除：连续帧在画布上形成时间堆叠。
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+
+        if (!offsets.length || frame % framecount === 1) {
+            composeParticles();
+        }
+
+        // 随机尺寸改为缓慢插值，避免覆盖面积每帧骤变造成亮度闪烁。
+        if (frame % 36 === 1) {
+            targetParticleSize = 2 * param + Math.random() * 2 * param;
+        }
+        particleSize += (targetParticleSize - particleSize) * 0.045;
+        const size = particleSize;
+        const spacing = step * param;
+        const segmentWidth = viewportWidth * wave.lengthRatio;
+        const startX = (viewportWidth - segmentWidth) / 2;
+        const endX = startX + segmentWidth;
+        const centerY = viewportHeight * 0.5;
+        const bandHeight = (wave.rows - 1) * spacing;
+        let i = 0;
+
+        ctx.fillStyle = '#fff';
+        for (let x = startX; x <= endX; x += spacing) {
+            const phase = x * wave.frequency + time + wave.phase;
+            const primary = Math.sin(phase) * wave.amplitude;
+            const detail = Math.sin(phase * 2.13 - time * 0.72) *
+                wave.amplitude * wave.secondWave;
+            const waveY = centerY + primary + detail;
+
+            // 一整列粒子共享 waveY，弯曲后仍保持基准网格的堆叠关系。
+            const totalRows = wave.rows + wave.fillRows;
+            for (let row = 0; row < totalRows; row++) {
+                const particle = offsets[i++] || { dx: 0, dy: 0, visible: true };
+                if (!particle.visible) continue;
+
+                const px = x + particle.dx;
+                const fillRow = row - wave.rows;
+                const py = fillRow < 0
+                    ? waveY + row * spacing - bandHeight / 2 + particle.dy
+                    : waveY + bandHeight / 2 + (fillRow + 1) * spacing + particle.dy;
+                ctx.fillRect(px, py, size, size);
+            }
+        }
+
+        // 定期换一套振幅、频率、厚度与方向，得到新的随机波浪。
+        if (frame % 720 === 0) {
+            wave = createWave();
+            composeParticles();
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    addEventListener('resize', resize);
+    resize();
+    animate();
+</script>
+</body>
+</html>
