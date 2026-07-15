@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Square Surf · 右上至左下粒子转场</title>
+    <style>
+        * { box-sizing: border-box; }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000000;
+        }
+
+        body {
+            font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+    </style>
+</head>
+<body>
+<canvas id="scene" aria-label="从右上角向左下角移动的方块粒子转场动画"></canvas>
+
+<script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+    const trailCanvas = document.createElement('canvas');
+    const trailCtx = trailCanvas.getContext('2d');
+
+    // 放大并加密 squre 粒子：约 17.5px 网格、28~55px 全局动态方块。
+    const param = 14;
+    const step = 1.25;
+    const spacing = param * step;
+    const framecount = 50;
+    // 增加前后排数，让浪潮沿移动方向形成更宽、更厚的粒子带。
+    const bandRows = 17;
+    const travelDuration = 3600;
+    const holdDuration = 1100;
+
+    const direction = { x: -Math.SQRT1_2, y: Math.SQRT1_2 };
+    const perpendicular = { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+
+    const scenes = [
+        {
+            top: '#000000',
+            bottom: '#000000',
+            accent: '#FFFFFF',
+            accentSoft: 'rgba(196, 196, 196, 0.10)',
+            palette: ['#343434', '#555555', '#7d7d7d', '#adadad', '#dedede'],
+            alphaBoost: 1.45,
+            waveInk: '#FFFFFF',
+        },
+        {
+            top: '#FFFFFF',
+            bottom: '#FFFFFF',
+            accent: '#000000',
+            accentSoft: 'rgba(72, 72, 72, 0.075)',
+            palette: ['#f0f0f0', '#d9d9d9', '#b7b7b7', '#858585', '#505050'],
+            alphaBoost: 1,
+            waveInk: '#000000',
+        }
+    ];
+
+    // 直接采用 squre_background 的五档灰阶、密度与呼吸参数。
+    const backgroundLevels = [
+        { pulse: 0.04, scale: 1.12, alpha: [0.44, 0.68] },
+        { pulse: 0.06, scale: 1.08, alpha: [0.32, 0.52] },
+        { pulse: 0.09, scale: 1.04, alpha: [0.22, 0.40] },
+        { pulse: 0.12, scale: 1.00, alpha: [0.14, 0.28] },
+        { pulse: 0.16, scale: 0.96, alpha: [0.08, 0.18] }
+    ];
+    const backgroundParticleSizeScale = 1.15;
+    const backgroundParticleDensity = 0.48;
+    const backgroundOverlapChance = 0.10;
+
+    // 两个场景分别绘制到独立画面层。
+    const sceneCanvases = scenes.map(() => document.createElement('canvas'));
+    const sceneContexts = sceneCanvases.map(item => item.getContext('2d'));
+    let backgroundParticles = [];
+
+    let width = innerWidth;
+    let height = innerHeight;
+    let dpr = 1;
+    let frame = 0;
+    let offsets = [];
+    let currentScene = 0;
+    let nextScene = 1;
+    let phase = 'transition';
+    let phaseStartedAt = performance.now() + 250;
+    let front = 0;
+    let minTravel = 0;
+    let maxTravel = 0;
+    let minAlong = 0;
+    let maxAlong = 0;
+
+    function projectionBounds(axis) {
+        const values = [
+            0,
+            width * axis.x,
+            height * axis.y,
+            width * axis.x + height * axis.y
+        ];
+        return [Math.min(...values), Math.max(...values)];
+    }
+
+    function resize() {
+        dpr = Math.min(devicePixelRatio || 1, 2);
+        width = innerWidth;
+        height = innerHeight;
+
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        trailCanvas.width = Math.round(width * dpr);
+        trailCanvas.height = Math.round(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        trailCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        sceneCanvases.forEach((item, index) => {
+            item.width = Math.round(width * dpr);
+            item.height = Math.round(height * dpr);
+            sceneContexts[index].setTransform(dpr, 0, 0, dpr, 0, 0);
+        });
+
+        [minTravel, maxTravel] = projectionBounds(direction);
+        [minAlong, maxAlong] = projectionBounds(perpendicular);
+        offsets = [];
+        buildBackgroundParticles();
+        clearTrail();
+    }
+
+    function clearTrail() {
+        trailCtx.save();
+        trailCtx.setTransform(1, 0, 0, 1, 0, 0);
+        trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+        trailCtx.restore();
+    }
+
+    function buildBackgroundParticles() {
+        const cell = Math.max(19, Math.min(27, width / 58));
+        const minimumParticleSize = Math.max(18, cell * 0.82);
+        const nextParticles = [];
+
+        function addMotion(particle) {
+            return {
+                ...particle,
+                levelIndex: Math.floor(Math.random() * backgroundLevels.length),
+                alphaMix: Math.random(),
+                phase: Math.random() * Math.PI * 2,
+                breathSpeed: 0.88 + Math.random() * 0.24
+            };
+        }
+
+        for (let x = -cell; x < width + cell; x += cell) {
+            for (let y = -cell; y < height + cell; y += cell) {
+                if (Math.random() > backgroundParticleDensity) continue;
+
+                const size = cell * (0.68 + Math.random() * 1.05);
+                const particle = {
+                    x: x + (Math.random() - 0.5) * cell * 0.86,
+                    y: y + (Math.random() - 0.5) * cell * 0.86,
+                    size,
+                    outline: Math.random() < 0.1
+                };
+                if (size < minimumParticleSize) continue;
+
+                nextParticles.push(addMotion(particle));
+
+                if (Math.random() < backgroundOverlapChance) {
+                    const overlapSize = size * (0.52 + Math.random() * 0.34);
+                    if (overlapSize < minimumParticleSize) continue;
+
+                    nextParticles.push(addMotion({
+                        x: particle.x + size * (0.24 + Math.random() * 0.34),
+                        y: particle.y + size * (0.2 + Math.random() * 0.38),
+                        size: overlapSize,
+                        outline: false
+                    }));
+                }
+            }
+        }
+
+        backgroundParticles = nextParticles;
+    }
+
+    function easeInOutCubic(value) {
+        return value < 0.5
+            ? 4 * value * value * value
+            : 1 - Math.pow(-2 * value + 2, 3) / 2;
+    }
+
+    function waveAt(along, time) {
+        return Math.sin(along * 0.011 + time * 0.0022) * 20
+            + Math.sin(along * 0.0043 - time * 0.0015 + 1.7) * 13;
+    }
+
+    function toCanvas(travel, along) {
+        return {
+            x: direction.x * travel + perpendicular.x * along,
+            y: direction.y * travel + perpendicular.y * along
+        };
+    }
+
+    function drawScene(target, scene, time) {
+        const background = target.createLinearGradient(0, 0, width, height);
+        background.addColorStop(0, scene.top);
+        background.addColorStop(1, scene.bottom);
+        target.fillStyle = background;
+        target.fillRect(0, 0, width, height);
+
+        const glowX = width * 0.72;
+        const glowY = height * 0.34;
+        const glowRadius = Math.max(width, height) * 0.42;
+        const glow = target.createRadialGradient(glowX, glowY, 0, glowX, glowY, glowRadius);
+        glow.addColorStop(0, scene.accentSoft);
+        glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        target.fillStyle = glow;
+        target.fillRect(0, 0, width, height);
+
+        target.save();
+        target.globalCompositeOperation = 'source-over';
+        backgroundParticles.forEach(particle => {
+            const level = backgroundLevels[particle.levelIndex];
+            const breathing = 1 + Math.sin(
+                time * 0.0017 * particle.breathSpeed + particle.phase
+            ) * level.pulse;
+            const size = particle.size
+                * backgroundParticleSizeScale
+                * level.scale
+                * breathing;
+            const color = scene.palette[particle.levelIndex];
+            target.globalAlpha = Math.min(
+                0.82,
+                (level.alpha[0]
+                    + particle.alphaMix * (level.alpha[1] - level.alpha[0]))
+                    * scene.alphaBoost
+            );
+
+            if (particle.outline) {
+                target.strokeStyle = color;
+                target.lineWidth = 1;
+                target.strokeRect(particle.x, particle.y, size, size);
+            } else {
+                target.fillStyle = color;
+                target.fillRect(particle.x, particle.y, size, size);
+            }
+        });
+        target.restore();
+    }
+
+    function renderSceneLayers(time) {
+        scenes.forEach((scene, index) => {
+            drawScene(sceneContexts[index], scene, time);
+        });
+    }
+
+    function paintSceneLayer(index) {
+        const source = sceneCanvases[index];
+        ctx.drawImage(source, 0, 0, source.width, source.height, 0, 0, width, height);
+    }
+
+    function clipPassedArea(time) {
+        const overscan = Math.hypot(width, height) + 180;
+        const alongStart = minAlong - 120;
+        const alongEnd = maxAlong + 120;
+        const samples = Math.max(36, Math.ceil((alongEnd - alongStart) / 28));
+
+        ctx.beginPath();
+        for (let index = 0; index <= samples; index++) {
+            const along = alongStart + (alongEnd - alongStart) * index / samples;
+            const point = toCanvas(front + waveAt(along, time), along);
+            if (index === 0) ctx.moveTo(point.x, point.y);
+            else ctx.lineTo(point.x, point.y);
+        }
+
+        const backEnd = toCanvas(minTravel - overscan, alongEnd);
+        const backStart = toCanvas(minTravel - overscan, alongStart);
+        ctx.lineTo(backEnd.x, backEnd.y);
+        ctx.lineTo(backStart.x, backStart.y);
+        ctx.closePath();
+        ctx.clip();
+    }
+
+    // 与说明书一致：offsets 是与波带网格一一对应的顺序数组。
+    function composeParticles() {
+        offsets = [];
+        const alongStart = minAlong - 80;
+        const alongEnd = maxAlong + 80;
+        for (let along = alongStart; along <= alongEnd; along += spacing) {
+            for (let row = 0; row < bandRows; row++) {
+                const edge = Math.abs(row - (bandRows - 1) / 2) / (bandRows / 2);
+                offsets.push({
+                    dx: Math.floor(Math.random() * 2 * param),
+                    dy: Math.floor(Math.random() * 2 * param),
+                    visible: Math.random() > edge * 0.18
+                });
+            }
+        }
+    }
+
+    function fadeTrail() {
+        trailCtx.save();
+        trailCtx.globalCompositeOperation = 'destination-out';
+        trailCtx.fillStyle = 'rgba(0, 0, 0, 0.19)';
+        trailCtx.fillRect(0, 0, width, height);
+        trailCtx.restore();
+    }
+
+    // 根据粒子中心与当前波浪分界线的关系，判断它实际位于哪个场景上方。
+    function sceneUnderPoint(x, y, time) {
+        const travel = x * direction.x + y * direction.y;
+        const along = x * perpendicular.x + y * perpendicular.y;
+        const boundary = front + waveAt(along, time);
+        return travel <= boundary ? nextScene : currentScene;
+    }
+
+    function drawSurfParticles(time) {
+        if (!offsets.length || frame % framecount === 1) composeParticles();
+
+        // squre 的动态关键：所有粒子在当前帧共享同一个随机 size。
+        const size = 2 * param + Math.floor(Math.random() * 2 * param);
+        const alongStart = minAlong - 80;
+        const alongEnd = maxAlong + 80;
+        const centerRow = (bandRows - 1) / 2;
+        const accent = scenes[nextScene].accent;
+        let index = 0;
+
+        trailCtx.save();
+        trailCtx.globalCompositeOperation = 'source-over';
+        for (let along = alongStart; along <= alongEnd; along += spacing) {
+            const wave = waveAt(along, time);
+            for (let row = 0; row < bandRows; row++) {
+                const particle = offsets[index++] || { dx: 0, dy: 0, visible: true };
+                if (!particle.visible) continue;
+
+                const rowOffset = (row - centerRow) * spacing;
+                const point = toCanvas(front + wave + rowOffset, along);
+                const edge = Math.abs(row - centerRow) / (centerRow + 1);
+                const drawX = point.x + particle.dx - param;
+                const drawY = point.y + particle.dy - param;
+                const outerEdge = row === 0 || row === bandRows - 1;
+
+                // 固定为仅首尾两排适应背景，中间粒子保留原始颜色规则。
+                trailCtx.globalAlpha = 0.22 + (1 - edge) * 0.72;
+                if (outerEdge) {
+                    const particleScene = sceneUnderPoint(
+                        drawX + size / 2,
+                        drawY + size / 2,
+                        time
+                    );
+                    trailCtx.fillStyle = scenes[particleScene].waveInk;
+                } else {
+                    trailCtx.fillStyle = row % 3 === 0 ? accent : '#ffffff';
+                }
+                trailCtx.fillRect(drawX, drawY, size, size);
+            }
+        }
+        trailCtx.restore();
+    }
+
+    function beginTransition(now) {
+        nextScene = (currentScene + 1) % scenes.length;
+        phase = 'transition';
+        phaseStartedAt = now;
+        offsets = [];
+        clearTrail();
+    }
+
+    function animate(now) {
+        frame++;
+        const elapsed = Math.max(0, now - phaseStartedAt);
+        renderSceneLayers(now);
+
+        if (phase === 'transition') {
+            const rawProgress = Math.min(1, elapsed / travelDuration);
+            const progress = easeInOutCubic(rawProgress);
+            const overscan = 130;
+            front = minTravel - overscan
+                + progress * (maxTravel - minTravel + overscan * 2);
+
+            paintSceneLayer(currentScene);
+            ctx.save();
+            clipPassedArea(now);
+            paintSceneLayer(nextScene);
+            ctx.restore();
+
+            fadeTrail();
+            drawSurfParticles(now);
+
+            if (rawProgress >= 1) {
+                currentScene = nextScene;
+                phase = 'hold';
+                phaseStartedAt = now;
+            }
+        } else {
+            paintSceneLayer(currentScene);
+            fadeTrail();
+            if (elapsed >= holdDuration) beginTransition(now);
+        }
+
+        ctx.drawImage(
+            trailCanvas,
+            0,
+            0,
+            trailCanvas.width,
+            trailCanvas.height,
+            0,
+            0,
+            width,
+            height
+        );
+        requestAnimationFrame(animate);
+    }
+
+    addEventListener('resize', resize);
+    addEventListener('pointerdown', () => beginTransition(performance.now()));
+    resize();
+    requestAnimationFrame(animate);
+</script>
+</body>
+</html>
