@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#03050a">
+    <meta name="description" content="轻量化赛博朋克方块粒子实验">
+    <title>Square Glitch</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --accent: #74f7ff;
+            --warning: #ffe84a;
+            --line: rgba(255, 255, 255, 0.22);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #03050a;
+            font-family: Consolas, "Microsoft YaHei", monospace;
+        }
+
+        canvas {
+            position: fixed;
+            inset: 0;
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+
+        .controls {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            z-index: 1;
+            display: flex;
+            gap: 6px;
+            padding: 6px;
+            border: 1px solid var(--line);
+            background: rgba(3, 5, 10, 0.82);
+        }
+
+        button {
+            min-height: 32px;
+            padding: 0 10px;
+            border: 1px solid transparent;
+            border-radius: 0;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.58);
+            font: inherit;
+            font-size: 10px;
+            cursor: pointer;
+        }
+
+        button:hover,
+        button:focus-visible {
+            color: #fff;
+            border-color: var(--line);
+            outline: none;
+        }
+
+        button[aria-pressed="true"] {
+            color: #03050a;
+            background: var(--accent);
+        }
+
+        #fault {
+            color: var(--warning);
+        }
+
+        #fault:hover,
+        #fault:focus-visible {
+            border-color: var(--warning);
+        }
+
+        @media (max-width: 520px) {
+            .controls {
+                top: auto;
+                right: 8px;
+                bottom: 8px;
+                left: 8px;
+                justify-content: center;
+            }
+
+            button {
+                flex: 1;
+                padding: 0 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+<canvas id="canvas" aria-label="可交互的单个整体方块粒子动画"></canvas>
+
+<nav class="controls" aria-label="粒子模式">
+    <button type="button" data-mode="pulse" aria-pressed="true">霓虹</button>
+    <button type="button" data-mode="breach" aria-pressed="false">警示</button>
+    <button type="button" data-mode="ghost" aria-pressed="false">残影</button>
+    <button type="button" id="fault">故障</button>
+    <button type="button" id="pause">暂停</button>
+</nav>
+
+<script>
+    (() => {
+        'use strict';
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', {
+            alpha: false,
+            desynchronized: true
+        });
+
+        const modeButtons = [...document.querySelectorAll('[data-mode]')];
+        const faultButton = document.getElementById('fault');
+        const pauseButton = document.getElementById('pause');
+        const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        const MODES = {
+            pulse: {
+                colors: ['#74f7ff', '#ff2ba6', '#e9fbff'],
+                accent: '#74f7ff',
+                speed: 0.18,
+                trail: 0.16,
+                chaos: 0.46,
+                wait: [260, 950]
+            },
+            breach: {
+                colors: ['#ffe84a', '#74f7ff', '#ff5252'],
+                accent: '#ffe84a',
+                speed: 0.25,
+                trail: 0.23,
+                chaos: 0.8,
+                wait: [100, 520]
+            },
+            ghost: {
+                colors: ['#b48cff', '#91a0b5', '#74f7ff'],
+                accent: '#b48cff',
+                speed: 0.1,
+                trail: 0.08,
+                chaos: 0.3,
+                wait: [500, 1500]
+            }
+        };
+
+        const GRID = innerWidth < 560 ? 3 : 4;
+        const PARTICLE_COUNT = GRID * GRID;
+        const PARTICLE_GROUP_SCALE = 0.78;
+        const particles = new Array(PARTICLE_COUNT);
+
+        let viewWidth = innerWidth;
+        let viewHeight = innerHeight;
+        let centerX = viewWidth * 0.5;
+        let centerY = viewHeight * 0.5;
+        let spacing = 24;
+        let modeKey = 'pulse';
+        let paused = false;
+        let glitch = 0;
+        let frame = 0;
+        let lastTime = performance.now();
+        let pointerX = centerX;
+        let pointerY = centerY;
+        let pointerActive = false;
+
+        function random(min, max) {
+            return min + Math.random() * (max - min);
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function lerp(from, to, amount) {
+            return from + (to - from) * amount;
+        }
+
+        function scheduleShift(particle, now, immediate = false) {
+            const mode = MODES[modeKey];
+            particle.nextShift = immediate
+                ? now
+                : now + random(mode.wait[0], mode.wait[1]);
+        }
+
+        function createParticles(now) {
+            let index = 0;
+
+            for (let row = 0; row < GRID; row += 1) {
+                for (let col = 0; col < GRID; col += 1) {
+                    const particle = particles[index] || {};
+                    particle.row = row;
+                    particle.col = col;
+                    particle.dx = random(-5, 5);
+                    particle.dy = random(-5, 5);
+                    particle.targetX = particle.dx;
+                    particle.targetY = particle.dy;
+                    particle.sizeMix = Math.random();
+                    particle.alpha = random(0.66, 0.94);
+                    particle.phase = random(0, Math.PI * 2);
+                    particle.ease = random(3.2, 6.4);
+                    scheduleShift(particle, now);
+                    particles[index] = particle;
+                    index += 1;
+                }
+            }
+        }
+
+        function resize() {
+            /*
+             * 像素比上限保持较低。与原版本的 2 相比，这会明显减少
+             * Canvas 像素数量和显存占用，尤其适合高分屏。
+             */
+            const dpr = Math.min(devicePixelRatio || 1, 1.25);
+            viewWidth = innerWidth;
+            viewHeight = innerHeight;
+            centerX = viewWidth * 0.5;
+            centerY = viewHeight * 0.5;
+            spacing = clamp(Math.min(viewWidth, viewHeight) / 11, 36, 62)
+                * PARTICLE_GROUP_SCALE;
+
+            canvas.width = Math.round(viewWidth * dpr);
+            canvas.height = Math.round(viewHeight * dpr);
+            canvas.style.width = `${viewWidth}px`;
+            canvas.style.height = `${viewHeight}px`;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.fillStyle = '#03050a';
+            ctx.fillRect(0, 0, viewWidth, viewHeight);
+        }
+
+        function updateRandomOffsets(now) {
+            const mode = MODES[modeKey];
+            const range = spacing * mode.chaos;
+
+            for (let index = 0; index < PARTICLE_COUNT; index += 1) {
+                const particle = particles[index];
+                if (now < particle.nextShift) continue;
+
+                /*
+                 * 随机同时作用于时间、方向、距离和移动速度：
+                 * 每个方块自行决定何时偏移，不再共享固定刷新周期。
+                 */
+                const angle = random(0, Math.PI * 2);
+                const distance = Math.pow(Math.random(), 1.7) * range;
+                particle.targetX = Math.cos(angle) * distance;
+                particle.targetY = Math.sin(angle) * distance;
+                particle.sizeMix = Math.random();
+
+                /*
+                 * 少量长尾事件产生突然的大幅破损。大多数变化仍然很小，
+                 * 避免整个粒子团持续散开。
+                 */
+                if (Math.random() < mode.chaos * 0.11) {
+                    particle.targetX += random(-range, range) * 1.8;
+                    particle.targetY += random(-range, range) * 0.8;
+                }
+
+                scheduleShift(particle, now);
+            }
+        }
+
+        function triggerFault() {
+            const mode = MODES[modeKey];
+            const range = spacing * (1.1 + mode.chaos);
+            glitch = 1;
+
+            for (let index = 0; index < PARTICLE_COUNT; index += 1) {
+                const particle = particles[index];
+
+                if (Math.random() < 0.48) {
+                    particle.targetX += random(-range, range);
+                    particle.targetY += random(-range * 0.35, range * 0.35);
+                    particle.sizeMix = Math.random();
+                    scheduleShift(particle, performance.now());
+                }
+            }
+        }
+
+        function drawParticle(x, y, size, color, alpha) {
+            /*
+             * 用一层稍大的低透明度方块模拟边缘柔化。
+             * 不使用 shadowBlur、filter 或加色混合，减少过曝与 GPU 开销。
+             */
+            const edge = Math.max(1, size * 0.08);
+
+            ctx.globalAlpha = alpha * 0.16;
+            ctx.fillStyle = color;
+            ctx.fillRect(x - edge, y - edge, size + edge * 2, size + edge * 2);
+
+            ctx.globalAlpha = alpha;
+            ctx.fillRect(x, y, size, size);
+        }
+
+        function render(now, delta) {
+            const mode = MODES[modeKey];
+            const drift = reducedMotion ? 0.2 : 1;
+            const groupWidth = spacing * (GRID - 1);
+            const startX = centerX - groupWidth * 0.5;
+            const startY = centerY - groupWidth * 0.5;
+            const collectiveSize = spacing * (
+                1.34
+                + Math.sin(frame * 0.055) * 0.08
+                + (reducedMotion ? 0 : random(0, mode.chaos * 0.2))
+            );
+
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = `rgba(3, 5, 10, ${mode.trail})`;
+            ctx.fillRect(0, 0, viewWidth, viewHeight);
+
+            updateRandomOffsets(now);
+
+            for (let index = 0; index < PARTICLE_COUNT; index += 1) {
+                const particle = particles[index];
+                const smoothness = clamp(
+                    delta * particle.ease * drift,
+                    0.02,
+                    0.22
+                );
+
+                particle.dx = lerp(particle.dx, particle.targetX, smoothness);
+                particle.dy = lerp(particle.dy, particle.targetY, smoothness);
+
+                let x = startX + particle.col * spacing + particle.dx;
+                let y = startY + particle.row * spacing + particle.dy;
+                let interaction = 0;
+
+                if (pointerActive) {
+                    const offsetX = x - pointerX;
+                    const offsetY = y - pointerY;
+                    const distance = Math.hypot(offsetX, offsetY);
+                    const radius = 130;
+
+                    if (distance > 0 && distance < radius) {
+                        interaction = 1 - distance / radius;
+                        x += (offsetX / distance) * interaction * spacing * 1.8;
+                        y += (offsetY / distance) * interaction * spacing * 1.8;
+                    }
+                }
+
+                const localSize = 0.9 + particle.sizeMix * mode.chaos * 0.22;
+                const breathing = 1 + Math.sin(frame * 0.035 + particle.phase) * 0.06;
+                const size = Math.max(
+                    spacing * 1.16,
+                    collectiveSize * localSize * breathing * (1 + interaction * 0.16)
+                );
+                const color = mode.colors[(index + Math.floor(frame / 90)) % mode.colors.length];
+                const faultX = glitch > 0.04 && index % 5 === 0
+                    ? random(-16, 16) * glitch
+                    : 0;
+
+                drawParticle(
+                    Math.round(x + faultX),
+                    Math.round(y),
+                    Math.ceil(size),
+                    color,
+                    particle.alpha
+                );
+            }
+
+            if (glitch > 0.04) {
+                ctx.globalAlpha = glitch * 0.62;
+                ctx.fillStyle = '#ffe84a';
+
+                for (let slice = 0; slice < 3; slice += 1) {
+                    ctx.fillRect(
+                        centerX + random(-groupWidth, groupWidth) * 0.62,
+                        centerY + random(-groupWidth, groupWidth) * 0.56,
+                        random(18, groupWidth * 0.72),
+                        random(1, 3)
+                    );
+                }
+
+                glitch *= reducedMotion ? 0.7 : 0.86;
+            }
+
+            ctx.globalAlpha = 1;
+        }
+
+        function animate(now) {
+            const frameInterval = 1000 / (reducedMotion ? 30 : 45);
+            if (now - lastTime < frameInterval) {
+                requestAnimationFrame(animate);
+                return;
+            }
+
+            const delta = clamp((now - lastTime) / 1000, 0, 0.05);
+            lastTime = now;
+
+            if (!paused) {
+                frame += 1;
+                render(now, delta);
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        function setMode(key) {
+            if (!MODES[key]) return;
+
+            modeKey = key;
+            document.documentElement.style.setProperty('--accent', MODES[key].accent);
+
+            for (const button of modeButtons) {
+                button.setAttribute(
+                    'aria-pressed',
+                    String(button.dataset.mode === key)
+                );
+            }
+
+            const now = performance.now();
+            for (let index = 0; index < PARTICLE_COUNT; index += 1) {
+                scheduleShift(particles[index], now, true);
+            }
+
+            triggerFault();
+        }
+
+        function togglePause() {
+            paused = !paused;
+            pauseButton.textContent = paused ? '继续' : '暂停';
+        }
+
+        for (const button of modeButtons) {
+            button.addEventListener('click', () => setMode(button.dataset.mode));
+        }
+
+        faultButton.addEventListener('click', triggerFault);
+        pauseButton.addEventListener('click', togglePause);
+
+        canvas.addEventListener('pointermove', event => {
+            pointerX = event.clientX;
+            pointerY = event.clientY;
+            pointerActive = true;
+        });
+
+        canvas.addEventListener('pointerleave', () => {
+            pointerActive = false;
+        });
+
+        canvas.addEventListener('pointerdown', event => {
+            pointerX = event.clientX;
+            pointerY = event.clientY;
+            pointerActive = true;
+            triggerFault();
+        });
+
+        addEventListener('keydown', event => {
+            if (event.code === 'Space') {
+                event.preventDefault();
+                togglePause();
+            }
+
+            if (event.key.toLowerCase() === 'g') {
+                triggerFault();
+            }
+        });
+
+        addEventListener('resize', resize);
+
+        const start = performance.now();
+        createParticles(start);
+        resize();
+        requestAnimationFrame(animate);
+    })();
+</script>
+</body>
+</html>
