@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#000000">
+    <title>文字 · 方块粒子</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            background: #000;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            cursor: crosshair;
+        }
+
+        .text-control {
+            position: fixed;
+            top: max(20px, env(safe-area-inset-top));
+            left: 50%;
+            z-index: 2;
+            display: flex;
+            width: min(520px, calc(100vw - 32px));
+            padding: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 14px;
+            background: rgba(18, 18, 18, 0.72);
+            box-shadow: 0 14px 38px rgba(0, 0, 0, 0.42);
+            backdrop-filter: blur(16px);
+            transform: translateX(-50%);
+        }
+
+        .text-control:focus-within {
+            border-color: rgba(255, 255, 255, 0.38);
+        }
+
+        .text-input {
+            min-width: 0;
+            flex: 1;
+            padding: 10px 12px;
+            border: 0;
+            outline: 0;
+            background: transparent;
+            color: #fff;
+            font: inherit;
+            font-size: 14px;
+            letter-spacing: 0.04em;
+        }
+
+        .text-input::placeholder {
+            color: rgba(255, 255, 255, 0.38);
+        }
+
+        .render-button {
+            flex: 0 0 auto;
+            padding: 0 16px;
+            border: 0;
+            border-radius: 10px;
+            background: #f2f2f2;
+            color: #090909;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 160ms ease, transform 160ms ease;
+        }
+
+        .render-button:hover {
+            background: #fff;
+        }
+
+        .render-button:active {
+            transform: scale(0.97);
+        }
+
+        .caption {
+            position: fixed;
+            left: max(22px, env(safe-area-inset-left));
+            bottom: max(20px, env(safe-area-inset-bottom));
+            z-index: 1;
+            margin: 0;
+            color: rgba(255, 255, 255, 0.42);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.22em;
+            pointer-events: none;
+            user-select: none;
+            transition: opacity 1.2s ease;
+        }
+
+        body.is-active .caption {
+            opacity: 0.16;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        @media (max-width: 520px) {
+            .text-control {
+                top: max(12px, env(safe-area-inset-top));
+                width: calc(100vw - 24px);
+            }
+
+            .render-button {
+                padding-inline: 13px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .caption {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <form class="text-control" id="text-form" autocomplete="off">
+        <label class="sr-only" for="text-input">输入要显示的文字</label>
+        <input
+            class="text-input"
+            id="text-input"
+            type="text"
+            value="你"
+            placeholder="输入任意文字"
+            spellcheck="false"
+            aria-describedby="input-hint"
+        >
+        <button class="render-button" type="submit">呈现</button>
+        <span class="sr-only" id="input-hint">输入时会自动生成粒子文字，也可以按回车确认。</span>
+    </form>
+
+    <canvas id="particle-canvas" aria-label="由明暗变化的白色方块粒子组成的文字：你"></canvas>
+    <p class="caption" aria-hidden="true">移动扰动 · 点击重组 · 输入文字</p>
+
+    <script>
+        (() => {
+            const canvas = document.getElementById('particle-canvas');
+            const ctx = canvas.getContext('2d', { alpha: false });
+            const maskCanvas = document.createElement('canvas');
+            const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+            const form = document.getElementById('text-form');
+            const textInput = document.getElementById('text-input');
+            const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const fontFamily = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+
+            let viewportWidth = 0;
+            let viewportHeight = 0;
+            let pixelRatio = 1;
+            let gridSize = 20;
+            let particleSize = 20;
+            let particles = [];
+            let currentText = '你';
+            let lastTime = 0;
+            let resizeTimer = 0;
+            let inputTimer = 0;
+
+            const pointer = {
+                x: -1000,
+                y: -1000,
+                active: false
+            };
+
+            const randomBetween = (min, max) => min + Math.random() * (max - min);
+
+            function resizeCanvas() {
+                viewportWidth = window.innerWidth;
+                viewportHeight = window.innerHeight;
+                pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+                canvas.width = Math.round(viewportWidth * pixelRatio);
+                canvas.height = Math.round(viewportHeight * pixelRatio);
+                canvas.style.width = `${viewportWidth}px`;
+                canvas.style.height = `${viewportHeight}px`;
+                ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+
+                maskCanvas.width = viewportWidth;
+                maskCanvas.height = viewportHeight;
+                buildTextParticles();
+            }
+
+            function wrapText(text, fontSize, maxWidth, fontWeight = 800) {
+                maskCtx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+                const lines = [];
+                const paragraphs = text.split(/\r?\n/);
+
+                for (const paragraph of paragraphs) {
+                    const characters = Array.from(paragraph);
+                    let line = '';
+
+                    if (!characters.length) {
+                        lines.push(' ');
+                        continue;
+                    }
+
+                    for (const character of characters) {
+                        const candidate = line + character;
+                        if (line && maskCtx.measureText(candidate).width > maxWidth) {
+                            lines.push(line.trimEnd());
+                            line = character.trimStart();
+                        } else {
+                            line = candidate;
+                        }
+                    }
+
+                    if (line) lines.push(line.trimEnd());
+                }
+
+                return lines.length ? lines : ['你'];
+            }
+
+            function findTextLayout(text, enlarged = true) {
+                const fontWeight = enlarged ? 800 : 900;
+                const maxWidth = viewportWidth * (enlarged
+                    ? (viewportWidth < 600 ? 0.94 : 0.92)
+                    : (viewportWidth < 600 ? 0.88 : 0.84));
+                const top = Math.max(enlarged ? 82 : 92, viewportHeight * (enlarged ? 0.1 : 0.12));
+                const bottom = Math.max(enlarged ? 42 : 54, viewportHeight * (enlarged ? 0.06 : 0.08));
+                const maxHeight = Math.max(80, viewportHeight - top - bottom);
+                let low = 8;
+                let high = enlarged
+                    ? Math.min(viewportWidth * 0.9, maxHeight * 0.94, 680)
+                    : Math.min(viewportWidth * 0.58, maxHeight * 0.9, 520);
+                let best = { fontSize: low, lines: wrapText(text, low, maxWidth, fontWeight) };
+
+                for (let index = 0; index < 14; index += 1) {
+                    const fontSize = (low + high) / 2;
+                    const lines = wrapText(text, fontSize, maxWidth, fontWeight);
+                    const lineHeight = fontSize * (enlarged ? 1.12 : 1.08);
+
+                    if (lines.length * lineHeight <= maxHeight) {
+                        best = { fontSize, lines };
+                        low = fontSize;
+                    } else {
+                        high = fontSize;
+                    }
+                }
+
+                return {
+                    ...best,
+                    fontWeight,
+                    lineHeight: best.fontSize * (enlarged ? 1.12 : 1.08),
+                    centerY: top + maxHeight / 2
+                };
+            }
+
+            function drawTextMask(layout) {
+                maskCtx.clearRect(0, 0, viewportWidth, viewportHeight);
+                maskCtx.fillStyle = '#fff';
+                maskCtx.textAlign = 'center';
+                maskCtx.textBaseline = 'middle';
+                maskCtx.font = `${layout.fontWeight} ${layout.fontSize}px ${fontFamily}`;
+
+                const blockHeight = layout.lines.length * layout.lineHeight;
+                const firstLineY = layout.centerY - blockHeight / 2 + layout.lineHeight / 2;
+
+                layout.lines.forEach((line, index) => {
+                    maskCtx.fillText(line, viewportWidth / 2, firstLineY + index * layout.lineHeight);
+                });
+            }
+
+            function readMaskAlpha(pixels, x, y) {
+                const safeX = Math.max(0, Math.min(viewportWidth - 1, Math.round(x)));
+                const safeY = Math.max(0, Math.min(viewportHeight - 1, Math.round(y)));
+                return pixels[(safeY * viewportWidth + safeX) * 4 + 3];
+            }
+
+            function collectTextTargets(pixels, threshold = 110, clearance = 0) {
+                const targets = [];
+                const offset = gridSize / 2;
+
+                for (let y = offset; y < viewportHeight; y += gridSize) {
+                    for (let x = offset; x < viewportWidth; x += gridSize) {
+                        if (readMaskAlpha(pixels, x, y) <= threshold) continue;
+
+                        if (clearance > 0) {
+                            const edgeThreshold = Math.max(72, threshold * 0.58);
+                            const insideStroke = [
+                                readMaskAlpha(pixels, x - clearance, y),
+                                readMaskAlpha(pixels, x + clearance, y),
+                                readMaskAlpha(pixels, x, y - clearance),
+                                readMaskAlpha(pixels, x, y + clearance)
+                            ].every(alpha => alpha > edgeThreshold);
+
+                            if (!insideStroke) continue;
+                        }
+
+                        targets.push({ x, y });
+                    }
+                }
+
+                return targets;
+            }
+
+            function shuffleTargets(targets) {
+                for (let index = targets.length - 1; index > 0; index -= 1) {
+                    const swapIndex = Math.floor(Math.random() * (index + 1));
+                    [targets[index], targets[swapIndex]] = [targets[swapIndex], targets[index]];
+                }
+                return targets;
+            }
+
+            function sampleTextTargets() {
+                const shortSide = Math.min(viewportWidth, viewportHeight);
+                const originalGrid = Math.max(17, Math.min(30, Math.round(shortSide / 40)));
+
+                // 延续上一版的粒子尺寸与采样密度。
+                gridSize = Math.round(originalGrid * 1.08);
+                particleSize = originalGrid * 2;
+
+                const layout = findTextLayout(currentText, true);
+                drawTextMask(layout);
+
+                const pixels = maskCtx.getImageData(0, 0, viewportWidth, viewportHeight).data;
+                const clearance = Math.max(3, Math.round(particleSize * 0.22));
+                let targets = collectTextTargets(pixels, 150, clearance);
+
+                // 很细的字体或标点保留降级路径，确保任意输入仍然能够呈现。
+                if (targets.length < 12) {
+                    targets = collectTextTargets(pixels, 105);
+                }
+
+                // 粒子数量直接由文字有效像素点决定：笔画和内容越多，粒子越多。
+                return shuffleTargets(targets);
+            }
+
+            function createParticle(target) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = randomBetween(
+                    Math.min(viewportWidth, viewportHeight) * 0.42,
+                    Math.max(viewportWidth, viewportHeight) * 0.72
+                );
+                const brightness = reduceMotion ? 0.88 : randomBetween(0.12, 1);
+
+                return {
+                    x: reduceMotion ? target.x : viewportWidth / 2 + Math.cos(angle) * radius,
+                    y: reduceMotion ? target.y : viewportHeight / 2 + Math.sin(angle) * radius,
+                    tx: target.x,
+                    ty: target.y,
+                    vx: reduceMotion ? 0 : Math.cos(angle) * -randomBetween(0.5, 2.2),
+                    vy: reduceMotion ? 0 : Math.sin(angle) * -randomBetween(0.5, 2.2),
+                    brightness,
+                    targetBrightness: brightness,
+                    offsetX: 0,
+                    offsetY: 0,
+                    targetOffsetX: 0,
+                    targetOffsetY: 0,
+                    nextOffsetAt: randomBetween(0, 900),
+                    nextBrightnessAt: randomBetween(0, 1200)
+                };
+            }
+
+            function buildTextParticles() {
+                const targets = sampleTextTargets();
+                const previous = particles;
+
+                particles = targets.map((target, index) => {
+                    const old = previous[index];
+                    if (!old) return createParticle(target);
+
+                    return {
+                        ...old,
+                        tx: target.x,
+                        ty: target.y,
+                        targetBrightness: old.targetBrightness ?? old.brightness ?? 0.86,
+                        nextBrightnessAt: old.nextBrightnessAt ?? randomBetween(0, 1200),
+                        targetOffsetX: old.targetOffsetX ?? old.offsetX ?? 0,
+                        targetOffsetY: old.targetOffsetY ?? old.offsetY ?? 0,
+                        nextOffsetAt: old.nextOffsetAt ?? randomBetween(0, 900)
+                    };
+                });
+
+                document.body.classList.remove('is-active');
+            }
+
+            function chooseNextOffset(particle, strength = 1, timestamp = performance.now()) {
+                const range = gridSize * 0.5 * strength;
+                particle.targetOffsetX = Math.floor(randomBetween(-range, range));
+                particle.targetOffsetY = Math.floor(randomBetween(-range, range));
+                particle.nextOffsetAt = timestamp + randomBetween(650, 1800);
+            }
+
+            function chooseNextBrightness(particle, timestamp) {
+                particle.targetBrightness = randomBetween(0.06, 1);
+                particle.nextBrightnessAt = timestamp + randomBetween(320, 1500);
+            }
+
+            function refreshOffsets(strength = 1) {
+                const timestamp = performance.now();
+                for (const particle of particles) chooseNextOffset(particle, strength, timestamp);
+            }
+
+            function scatter(strength = 1) {
+                for (const particle of particles) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const impulse = randomBetween(2.5, 7.5) * strength;
+                    particle.vx += Math.cos(angle) * impulse;
+                    particle.vy += Math.sin(angle) * impulse;
+                    chooseNextBrightness(particle, performance.now());
+                }
+
+                refreshOffsets(2.4);
+                document.body.classList.add('is-active');
+            }
+
+            function draw(timestamp) {
+                const delta = Math.min((timestamp - lastTime) / 16.67 || 1, 2);
+                lastTime = timestamp;
+
+                ctx.fillStyle = reduceMotion ? '#000' : 'rgba(0, 0, 0, 0.14)';
+                ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+
+                const pointerRadius = Math.max(72, gridSize * 9);
+                ctx.fillStyle = '#fff';
+                ctx.globalCompositeOperation = 'source-over';
+
+                for (const particle of particles) {
+                    if (!reduceMotion && timestamp >= particle.nextOffsetAt) {
+                        chooseNextOffset(particle, 1, timestamp);
+                    }
+                    if (!reduceMotion && timestamp >= particle.nextBrightnessAt) {
+                        chooseNextBrightness(particle, timestamp);
+                    }
+
+                    particle.vx += (particle.tx - particle.x) * 0.026 * delta;
+                    particle.vy += (particle.ty - particle.y) * 0.026 * delta;
+
+                    if (pointer.active && !reduceMotion) {
+                        const dx = particle.x - pointer.x;
+                        const dy = particle.y - pointer.y;
+                        const distance = Math.hypot(dx, dy) || 1;
+
+                        if (distance < pointerRadius) {
+                            const force = (1 - distance / pointerRadius) * 1.45;
+                            particle.vx += (dx / distance) * force * delta;
+                            particle.vy += (dy / distance) * force * delta;
+                        }
+                    }
+
+                    particle.vx *= Math.pow(0.9, delta);
+                    particle.vy *= Math.pow(0.9, delta);
+                    particle.x += particle.vx * delta;
+                    particle.y += particle.vy * delta;
+                    particle.offsetX += (particle.targetOffsetX - particle.offsetX) * 0.085 * delta;
+                    particle.offsetY += (particle.targetOffsetY - particle.offsetY) * 0.085 * delta;
+                    particle.brightness += (particle.targetBrightness - particle.brightness) * 0.045 * delta;
+
+                    ctx.globalAlpha = reduceMotion ? 0.88 : particle.brightness;
+                    ctx.fillRect(
+                        Math.round(particle.x + particle.offsetX - particleSize / 2),
+                        Math.round(particle.y + particle.offsetY - particleSize / 2),
+                        particleSize,
+                        particleSize
+                    );
+                }
+
+                ctx.globalAlpha = 1;
+                requestAnimationFrame(draw);
+            }
+
+            function renderInputText() {
+                const nextText = textInput.value.trim() || '你';
+                textInput.value = nextText;
+
+                if (nextText === currentText) {
+                    scatter(0.45);
+                    return;
+                }
+
+                currentText = nextText;
+                canvas.setAttribute('aria-label', `由明暗变化的白色方块粒子组成的文字：${currentText}`);
+                buildTextParticles();
+                scatter(0.7);
+            }
+
+            function updatePointer(event) {
+                pointer.x = event.clientX;
+                pointer.y = event.clientY;
+                pointer.active = true;
+                document.body.classList.add('is-active');
+            }
+
+            form.addEventListener('submit', event => {
+                event.preventDefault();
+                clearTimeout(inputTimer);
+                renderInputText();
+                textInput.blur();
+            });
+
+            textInput.addEventListener('input', () => {
+                clearTimeout(inputTimer);
+                if (!textInput.value.trim()) return;
+                inputTimer = setTimeout(renderInputText, 260);
+            });
+
+            canvas.addEventListener('pointermove', updatePointer);
+            canvas.addEventListener('pointerdown', event => {
+                updatePointer(event);
+                scatter(1);
+                canvas.setPointerCapture?.(event.pointerId);
+            });
+            canvas.addEventListener('pointerleave', () => {
+                pointer.active = false;
+            });
+            canvas.addEventListener('pointerup', event => {
+                if (event.pointerType !== 'mouse') pointer.active = false;
+            });
+
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(resizeCanvas, 120);
+            });
+
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) lastTime = performance.now();
+            });
+
+            resizeCanvas();
+            requestAnimationFrame(draw);
+        })();
+    </script>
+</body>
+</html>
