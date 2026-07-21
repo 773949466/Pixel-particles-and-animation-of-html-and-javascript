@@ -5,6 +5,13 @@
 像素粒子按钮预览：
 <img width="1031" height="450" alt="按钮" src="https://github.com/user-attachments/assets/38e4d0e8-2115-40b8-b382-e97dcca4f4b9" />
 
+像素粒子炸弹预览：
+<img width="473" height="382" alt="炸弹" src="https://github.com/user-attachments/assets/30d96663-9f1c-46cf-ae00-61de7a14293a" />
+
+像素粒子史莱姆预览：
+<img width="720" height="445" alt="史莱姆" src="https://github.com/user-attachments/assets/baefd460-711e-4f7e-9f2c-79966e3fbb38" />
+
+
 像素粒子波浪预览：
 <img width="1185" height="561" alt="波浪" src="https://github.com/user-attachments/assets/74cc9cf7-ce1e-4e7d-a33b-5678f09f8103" />
 
