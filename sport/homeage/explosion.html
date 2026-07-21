@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Open</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        min-height: 100svh;
+        place-items: center;
+        overflow: hidden;
+        background: #000;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      #glow-background,
+      #particle-background {
+        position: fixed;
+        inset: 0;
+        display: block;
+        visibility: hidden;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      #glow-background {
+        z-index: 0;
+      }
+
+      #particle-background {
+        z-index: 1;
+      }
+
+      body.is-opening #glow-background,
+      body.is-opening #particle-background {
+        animation: reveal-particle-background 1440ms steps(1, end) forwards;
+      }
+
+      @keyframes reveal-particle-background {
+        0%,
+        55.99% {
+          visibility: hidden;
+        }
+        56%,
+        100% {
+          visibility: visible;
+        }
+      }
+
+      .open-block {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        width: min(31vw, 340px);
+        aspect-ratio: 1;
+        place-items: center;
+        isolation: isolate;
+        cursor: pointer;
+        touch-action: manipulation;
+        user-select: none;
+        transform: translate(-50%, -50%) scale(1);
+        will-change: transform;
+      }
+
+      .open-block.is-pressed {
+        animation:
+          press-block 1440ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards,
+          particle-collision-timer 1036.8ms linear;
+      }
+
+      @keyframes particle-collision-timer {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes press-block {
+        0% {
+          transform: translate(-50%, -50%) scale(1);
+        }
+        38% {
+          transform: translate(-50%, -50%) scale(0.76);
+        }
+        56% {
+          transform: translate(-50%, -50%) scale(1);
+        }
+        72%,
+        100% {
+          transform: translate(-50%, -50%) scale(1.24);
+        }
+      }
+
+      .block-particles {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        filter: drop-shadow(0 24px 54px rgb(255 255 255 / 8%));
+      }
+
+      .open-block.is-pressed .block-particles {
+        animation: hide-block-particles 1440ms steps(1, end) forwards;
+      }
+
+      @keyframes hide-block-particles {
+        0%,
+        55.99% {
+          visibility: visible;
+          filter: drop-shadow(0 24px 54px rgb(255 255 255 / 8%));
+        }
+        56%,
+        100% {
+          visibility: hidden;
+          filter: none;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .open-block {
+          width: min(39vw, 260px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="glow-background" aria-hidden="true"></canvas>
+    <canvas id="particle-background" aria-hidden="true"></canvas>
+
+    <main class="open-block" role="button" tabindex="0" aria-label="open">
+      <canvas class="block-particles" aria-hidden="true"></canvas>
+    </main>
+
+    <script>
+      const openBlock = document.querySelector(".open-block");
+      const blockCanvas = document.querySelector(".block-particles");
+      const glowCanvas = document.querySelector("#glow-background");
+      const particleCanvas = document.querySelector("#particle-background");
+      const blockCtx = blockCanvas.getContext("2d");
+      const glowCtx = glowCanvas.getContext("2d");
+      const particleCtx = particleCanvas.getContext("2d");
+      const blockHitCtx = document.createElement("canvas").getContext("2d");
+      const hitTestCtx = document.createElement("canvas").getContext("2d");
+      const textMaskCanvas = document.createElement("canvas");
+      const textMaskCtx = textMaskCanvas.getContext("2d", { willReadFrequently: true });
+      const textFontFamily = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+      const textVerticalScale = 1.4;
+
+      const backgroundStyle = {
+        background: "#000",
+        glow: "rgba(196, 196, 196, 0.1)",
+        palette: ["#343434", "#555555", "#7d7d7d", "#adadad", "#dedede"],
+        alphaBoost: 1.45
+      };
+
+      const levels = [
+        { pulse: 0.04, scale: 1.12, alpha: [0.44, 0.68] },
+        { pulse: 0.06, scale: 1.08, alpha: [0.32, 0.52] },
+        { pulse: 0.09, scale: 1.04, alpha: [0.22, 0.4] },
+        { pulse: 0.12, scale: 1, alpha: [0.14, 0.28] },
+        { pulse: 0.16, scale: 0.96, alpha: [0.08, 0.18] }
+      ];
+
+      const blockLevels = [
+        { color: "#ffffff", alpha: [0.88, 0.98], scale: 1.25, pulse: 0.04, refresh: 100 },
+        { color: "#d6d6d6", alpha: [0.76, 0.9], scale: 1.18, pulse: 0.06, refresh: 75 },
+        { color: "#969696", alpha: [0.62, 0.78], scale: 1.12, pulse: 0.09, refresh: 50 },
+        { color: "#4c4c4c", alpha: [0.56, 0.74], scale: 1.06, pulse: 0.12, refresh: 35 },
+        { color: "#000000", alpha: [0.78, 0.96], scale: 1, pulse: 0.16, refresh: 20 }
+      ];
+
+      const particleDensity = 0.12;
+      const overlapChance = 0.1;
+      let width;
+      let height;
+      let blockWidth = 0;
+      let blockHeight = 0;
+      let blockCanvasWidth = 0;
+      let blockCanvasHeight = 0;
+      let blockPadding = 0;
+      let blockParam = 6;
+      const blockStep = 2;
+      let blockSpacing = 12;
+      let blockShapePath;
+      let blockParticles = [];
+      let blockFrame = 0;
+      let particles = [];
+      let textParticles = [];
+      let textGridSize = 20;
+      let textParticleSize = 20;
+      let collisionApplied = false;
+      let textPrintingStarted = false;
+      let lastFrameTime = 0;
+
+      const randomBetween = (min, max) => min + Math.random() * (max - min);
+      const textPointer = {
+        x: -1000,
+        y: -1000,
+        active: false
+      };
+
+      function centerOpenBlock() {
+        // 第一步：读取当前窗口的宽度和高度。
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
+
+        // 第二步：把方块中心放在窗口中心。
+        openBlock.style.position = "fixed";
+        openBlock.style.left = `${windowWidth / 2}px`;
+        openBlock.style.top = `${windowHeight / 2}px`;
+      }
+
+      function createBulgedBlockPath(pathWidth, pathHeight) {
+        const path = new Path2D();
+        path.moveTo(pathWidth * 0.08, pathHeight * 0.05);
+        path.quadraticCurveTo(
+          pathWidth * 0.5,
+          0,
+          pathWidth * 0.92,
+          pathHeight * 0.05
+        );
+        path.quadraticCurveTo(
+          pathWidth,
+          pathHeight * 0.5,
+          pathWidth * 0.92,
+          pathHeight * 0.95
+        );
+        path.quadraticCurveTo(
+          pathWidth * 0.5,
+          pathHeight,
+          pathWidth * 0.08,
+          pathHeight * 0.95
+        );
+        path.quadraticCurveTo(
+          0,
+          pathHeight * 0.5,
+          pathWidth * 0.08,
+          pathHeight * 0.05
+        );
+        path.closePath();
+        return path;
+      }
+
+      function chooseBlockLevel() {
+        return Math.floor(Math.random() * blockLevels.length);
+      }
+
+      function buildBlockParticles() {
+        blockParticles = [];
+        if (!blockWidth || !blockHeight) return;
+
+        blockShapePath = createBulgedBlockPath(blockWidth, blockHeight);
+
+        function collectGridCandidates(spacing, offsetX = 0, offsetY = 0) {
+          const candidates = [];
+
+          for (let x = -spacing + offsetX; x < blockWidth + spacing; x += spacing) {
+            for (let y = -spacing + offsetY; y < blockHeight + spacing; y += spacing) {
+              const centerX = x + spacing / 2;
+              const centerY = y + spacing / 2;
+              if (!blockHitCtx.isPointInPath(blockShapePath, centerX, centerY)) continue;
+              candidates.push({ x: centerX, y: centerY });
+            }
+          }
+
+          return candidates;
+        }
+
+        const originalSpacing = blockSpacing / 2;
+        const originalCount = collectGridCandidates(originalSpacing).length;
+        const targetCount = Math.max(1, Math.round(originalCount / 4));
+        const firstPhase = blockSpacing / 4;
+        const secondPhase = blockSpacing * 0.75;
+        const phaseOffsets = [
+          [firstPhase, firstPhase],
+          [secondPhase, firstPhase],
+          [firstPhase, secondPhase],
+          [secondPhase, secondPhase]
+        ];
+        const candidateSets = phaseOffsets.map(([offsetX, offsetY]) => {
+          return collectGridCandidates(blockSpacing, offsetX, offsetY);
+        });
+        const candidates = candidateSets.sort((a, b) => {
+          const aEnough = a.length >= targetCount;
+          const bEnough = b.length >= targetCount;
+          if (aEnough !== bEnough) return aEnough ? -1 : 1;
+          return aEnough ? a.length - b.length : b.length - a.length;
+        })[0];
+
+        for (let index = candidates.length - 1; index > 0; index -= 1) {
+          const swapIndex = Math.floor(Math.random() * (index + 1));
+          [candidates[index], candidates[swapIndex]] = [candidates[swapIndex], candidates[index]];
+        }
+
+        for (const candidate of candidates.slice(0, targetCount)) {
+          blockParticles.push({
+            x: candidate.x,
+            y: candidate.y,
+            dx: Math.floor(Math.random() * 2 * blockParam),
+            dy: Math.floor(Math.random() * 2 * blockParam),
+            levelIndex: chooseBlockLevel(),
+            alphaMix: Math.random(),
+            phase: Math.random() * Math.PI * 2
+          });
+        }
+      }
+
+      function resizeBlockParticles() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        blockWidth = openBlock.clientWidth;
+        blockHeight = openBlock.clientHeight;
+        const originalParam = Math.max(4, Math.min(8, blockWidth / 55));
+
+        // param 加倍：粒子尺寸与随机偏移范围同步放大为原来的 2 倍。
+        blockParam = originalParam * 2;
+
+        // 严格使用说明书的间距公式：distance = step × param。
+        // step 固定为 2，横纵网格数量各减半，总数量约为原来的 1/4。
+        blockSpacing = blockStep * blockParam;
+
+        // 预留最大粒子半径、随机偏移和呼吸放大所需空间，避免 Canvas 边缘裁切。
+        blockPadding = Math.ceil(blockParam * 5.2);
+        blockCanvasWidth = blockWidth + blockPadding * 2;
+        blockCanvasHeight = blockHeight + blockPadding * 2;
+        blockCanvas.style.left = `${-blockPadding}px`;
+        blockCanvas.style.top = `${-blockPadding}px`;
+        blockCanvas.style.width = `${blockCanvasWidth}px`;
+        blockCanvas.style.height = `${blockCanvasHeight}px`;
+        blockCanvas.width = Math.round(blockCanvasWidth * dpr);
+        blockCanvas.height = Math.round(blockCanvasHeight * dpr);
+        blockCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        blockCtx.clearRect(0, 0, blockCanvasWidth, blockCanvasHeight);
+        buildBlockParticles();
+      }
+
+      function drawBlockParticles() {
+        if (!blockShapePath || !blockParticles.length) return;
+        blockFrame += 1;
+
+        blockCtx.save();
+        blockCtx.globalCompositeOperation = "destination-out";
+        blockCtx.fillStyle = "rgba(0, 0, 0, 0.22)";
+        blockCtx.fillRect(0, 0, blockCanvasWidth, blockCanvasHeight);
+        blockCtx.restore();
+
+        const globalSize = 2 * blockParam + Math.floor(Math.random() * 2 * blockParam);
+
+        blockCtx.save();
+        blockCtx.translate(blockPadding, blockPadding);
+
+        for (const particle of blockParticles) {
+          const level = blockLevels[particle.levelIndex];
+
+          if (blockFrame % level.refresh === 1) {
+            particle.dx = Math.floor(Math.random() * 2 * blockParam);
+            particle.dy = Math.floor(Math.random() * 2 * blockParam);
+          }
+
+          const breathing = 1 + Math.sin(
+            blockFrame * 0.035 + particle.phase
+          ) * level.pulse;
+          const size = Math.max(
+            blockSpacing,
+            globalSize * level.scale * breathing
+          );
+          particle.currentSize = size;
+          const [minAlpha, maxAlpha] = level.alpha;
+
+          blockCtx.globalAlpha = minAlpha
+            + particle.alphaMix * (maxAlpha - minAlpha);
+          blockCtx.fillStyle = level.color;
+          blockCtx.fillRect(
+            particle.x + particle.dx - size / 2,
+            particle.y + particle.dy - size / 2,
+            size,
+            size
+          );
+        }
+
+        blockCtx.globalAlpha = 1;
+        blockCtx.restore();
+      }
+
+      function addMotion(particle) {
+        return {
+          ...particle,
+          levelIndex: Math.floor(Math.random() * levels.length),
+          alphaMix: Math.random(),
+          phase: Math.random() * Math.PI * 2,
+          breathSpeed: 0.88 + Math.random() * 0.24
+        };
+      }
+
+      function buildParticles() {
+        const cell = Math.max(19, Math.min(27, width / 58));
+        const minimumSize = Math.max(18, cell * 0.82);
+        const nextParticles = [];
+
+        for (let x = -cell; x < width + cell; x += cell) {
+          for (let y = -cell; y < height + cell; y += cell) {
+            if (Math.random() > particleDensity) continue;
+
+            const size = cell * (0.68 + Math.random() * 1.05);
+            if (size < minimumSize) continue;
+
+            const particle = {
+              x: x + (Math.random() - 0.5) * cell * 0.86,
+              y: y + (Math.random() - 0.5) * cell * 0.86,
+              size,
+              outline: Math.random() < 0.1
+            };
+            nextParticles.push(addMotion(particle));
+
+            if (Math.random() < overlapChance) {
+              const overlapSize = size * (0.52 + Math.random() * 0.34);
+              if (overlapSize >= minimumSize) {
+                nextParticles.push(addMotion({
+                  x: particle.x + size * (0.24 + Math.random() * 0.34),
+                  y: particle.y + size * (0.2 + Math.random() * 0.38),
+                  size: overlapSize,
+                  outline: false
+                }));
+              }
+            }
+          }
+        }
+
+        particles = nextParticles;
+      }
+
+      function getBackgroundMaximumParticleSize() {
+        const cell = Math.max(19, Math.min(27, width / 58));
+        const maximumGeneratedSize = cell * (0.68 + 1.05);
+        const maximumLevelFactor = Math.max(
+          ...levels.map((level) => level.scale * (1 + level.pulse))
+        );
+
+        return maximumGeneratedSize * 1.15 * maximumLevelFactor;
+      }
+
+      function resizeParticleBackground() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        width = innerWidth;
+        height = innerHeight;
+
+        for (const [canvas, context] of [
+          [glowCanvas, glowCtx],
+          [particleCanvas, particleCtx]
+        ]) {
+          canvas.width = Math.round(width * dpr);
+          canvas.height = Math.round(height * dpr);
+          context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        textMaskCanvas.width = width;
+        textMaskCanvas.height = height;
+
+        buildParticles();
+
+        if (textPrintingStarted) {
+          startTextPrinting();
+        }
+      }
+
+      function drawGlow() {
+        glowCtx.fillStyle = backgroundStyle.background;
+        glowCtx.fillRect(0, 0, width, height);
+
+        const glowX = width * 0.72;
+        const glowY = height * 0.34;
+        const glow = glowCtx.createRadialGradient(
+          glowX,
+          glowY,
+          0,
+          glowX,
+          glowY,
+          Math.max(width, height) * 0.42
+        );
+        glow.addColorStop(0, backgroundStyle.glow);
+        glow.addColorStop(1, "transparent");
+        glowCtx.fillStyle = glow;
+        glowCtx.fillRect(0, 0, width, height);
+      }
+
+      function maskParticlesBehindBlock() {
+        if (!document.body.classList.contains("is-opening") || collisionApplied) return;
+
+        const rect = openBlock.getBoundingClientRect();
+        const x = rect.left;
+        const y = rect.top;
+        const w = rect.width;
+        const h = rect.height;
+
+        particleCtx.save();
+        particleCtx.globalCompositeOperation = "destination-out";
+        particleCtx.beginPath();
+        particleCtx.moveTo(x + w * 0.08, y + h * 0.05);
+        particleCtx.quadraticCurveTo(x + w * 0.5, y, x + w * 0.92, y + h * 0.05);
+        particleCtx.quadraticCurveTo(x + w, y + h * 0.5, x + w * 0.92, y + h * 0.95);
+        particleCtx.quadraticCurveTo(x + w * 0.5, y + h, x + w * 0.08, y + h * 0.95);
+        particleCtx.quadraticCurveTo(x, y + h * 0.5, x + w * 0.08, y + h * 0.05);
+        particleCtx.closePath();
+        particleCtx.fill();
+        particleCtx.restore();
+      }
+
+      function createBlockPath(rect) {
+        const path = new Path2D();
+        path.moveTo(rect.left + rect.width * 0.08, rect.top + rect.height * 0.05);
+        path.quadraticCurveTo(
+          rect.left + rect.width * 0.5,
+          rect.top,
+          rect.left + rect.width * 0.92,
+          rect.top + rect.height * 0.05
+        );
+        path.quadraticCurveTo(
+          rect.right,
+          rect.top + rect.height * 0.5,
+          rect.left + rect.width * 0.92,
+          rect.top + rect.height * 0.95
+        );
+        path.quadraticCurveTo(
+          rect.left + rect.width * 0.5,
+          rect.bottom,
+          rect.left + rect.width * 0.08,
+          rect.top + rect.height * 0.95
+        );
+        path.quadraticCurveTo(
+          rect.left,
+          rect.top + rect.height * 0.5,
+          rect.left + rect.width * 0.08,
+          rect.top + rect.height * 0.05
+        );
+        path.closePath();
+
+        return path;
+      }
+
+      function particleOverlapsBlock(particle, blockRect, blockPath) {
+        const size = particle.currentSize || particle.size;
+        const left = particle.x;
+        const top = particle.y;
+        const right = left + size;
+        const bottom = top + size;
+
+        if (
+          right < blockRect.left ||
+          left > blockRect.right ||
+          bottom < blockRect.top ||
+          top > blockRect.bottom
+        ) {
+          return false;
+        }
+
+        const samplePoints = [
+          [left, top],
+          [right, top],
+          [right, bottom],
+          [left, bottom],
+          [(left + right) / 2, top],
+          [right, (top + bottom) / 2],
+          [(left + right) / 2, bottom],
+          [left, (top + bottom) / 2],
+          [(left + right) / 2, (top + bottom) / 2]
+        ];
+
+        return samplePoints.some(([x, y]) => hitTestCtx.isPointInPath(blockPath, x, y));
+      }
+
+      function removeParticlesOverlappingBlock() {
+        const blockRect = openBlock.getBoundingClientRect();
+        const blockPath = createBlockPath(blockRect);
+        particles = particles.filter(
+          (particle) => !particleOverlapsBlock(particle, blockRect, blockPath)
+        );
+        collisionApplied = true;
+      }
+
+      function wrapText(text, fontSize, maxWidth, fontWeight = 800) {
+        textMaskCtx.font = `${fontWeight} ${fontSize}px ${textFontFamily}`;
+        const lines = [];
+        const paragraphs = text.split(/\r?\n/);
+
+        for (const paragraph of paragraphs) {
+          const characters = Array.from(paragraph);
+          let line = "";
+
+          if (!characters.length) {
+            lines.push(" ");
+            continue;
+          }
+
+          for (const character of characters) {
+            const candidate = line + character;
+            if (line && textMaskCtx.measureText(candidate).width > maxWidth) {
+              lines.push(line.trimEnd());
+              line = character.trimStart();
+            } else {
+              line = candidate;
+            }
+          }
+
+          if (line) lines.push(line.trimEnd());
+        }
+
+        return lines.length ? lines : ["By square"];
+      }
+
+      function findTextLayout(text, enlarged = true) {
+        const fontWeight = enlarged ? 800 : 900;
+        const maxWidth = width * (enlarged
+          ? (width < 600 ? 0.94 : 0.92)
+          : (width < 600 ? 0.88 : 0.84));
+        const top = Math.max(enlarged ? 82 : 92, height * (enlarged ? 0.1 : 0.12));
+        const bottom = Math.max(enlarged ? 42 : 54, height * (enlarged ? 0.06 : 0.08));
+        const maxHeight = Math.max(80, height - top - bottom);
+        let low = 8;
+        let high = enlarged
+          ? Math.min(width * 0.9, maxHeight * 0.94, 680)
+          : Math.min(width * 0.58, maxHeight * 0.9, 520);
+        let best = { fontSize: low, lines: wrapText(text, low, maxWidth, fontWeight) };
+
+        for (let index = 0; index < 14; index += 1) {
+          const fontSize = (low + high) / 2;
+          const lines = wrapText(text, fontSize, maxWidth, fontWeight);
+          const lineHeight = fontSize * (enlarged ? 1.12 : 1.08);
+
+          if (lines.length * lineHeight <= maxHeight) {
+            best = { fontSize, lines };
+            low = fontSize;
+          } else {
+            high = fontSize;
+          }
+        }
+
+        return {
+          ...best,
+          fontWeight,
+          lineHeight: best.fontSize * (enlarged ? 1.12 : 1.08)
+        };
+      }
+
+      function drawCharacterMask(character, fontSize, centerX, centerY) {
+        textMaskCtx.clearRect(0, 0, width, height);
+        textMaskCtx.fillStyle = "#fff";
+        textMaskCtx.textAlign = "center";
+        textMaskCtx.textBaseline = "middle";
+        textMaskCtx.font = `800 ${fontSize}px ${textFontFamily}`;
+        textMaskCtx.fillText(character, centerX, centerY);
+      }
+
+      function collectCharacterTargets(character, centerX, centerY, fontSize, characterIndex) {
+        drawCharacterMask(character, fontSize, centerX, centerY);
+        const pixels = textMaskCtx.getImageData(0, 0, width, height).data;
+
+        function readMaskAlpha(x, y) {
+          const safeX = Math.max(0, Math.min(width - 1, Math.round(x)));
+          const safeY = Math.max(0, Math.min(height - 1, Math.round(y)));
+          return pixels[(safeY * width + safeX) * 4 + 3];
+        }
+
+        function collect(threshold, clearance = 0) {
+          const targets = [];
+          const offset = textGridSize / 2;
+
+          for (let y = offset; y < height; y += textGridSize) {
+            for (let x = offset; x < width; x += textGridSize) {
+              if (readMaskAlpha(x, y) <= threshold) continue;
+
+              if (clearance > 0) {
+                const edgeThreshold = Math.max(72, threshold * 0.58);
+                const insideStroke = [
+                  readMaskAlpha(x - clearance, y),
+                  readMaskAlpha(x + clearance, y),
+                  readMaskAlpha(x, y - clearance),
+                  readMaskAlpha(x, y + clearance)
+                ].every((alpha) => alpha > edgeThreshold);
+
+                if (!insideStroke) continue;
+              }
+
+              targets.push({ x, y, character, characterIndex });
+            }
+          }
+
+          return targets;
+        }
+
+        const clearance = Math.max(3, Math.round(textParticleSize * 0.22));
+        let targets = collect(150, clearance);
+
+        if (targets.length < 12) {
+          targets = collect(105);
+        }
+
+        return orderTargetsForPrinting(targets);
+      }
+
+      function orderTargetsForPrinting(targets) {
+        return targets.sort((a, b) => a.y - b.y || a.x - b.x);
+      }
+
+      function samplePhraseTargets(text, centerX, centerY, fontSize) {
+        textMaskCtx.font = `800 ${fontSize}px ${textFontFamily}`;
+        const characters = Array.from(text);
+        const letterSpacing = fontSize * 0.035;
+        const advances = characters.map((character) => {
+          return textMaskCtx.measureText(character).width;
+        });
+        const totalWidth = advances.reduce((sum, advance) => sum + advance, 0)
+          + Math.max(0, characters.length - 1) * letterSpacing;
+        const phraseTargets = [];
+        let cursorX = centerX - totalWidth / 2;
+
+        characters.forEach((character, characterIndex) => {
+          const advance = advances[characterIndex];
+          const characterCenterX = cursorX + advance / 2;
+
+          if (character.trim()) {
+            const characterTargets = collectCharacterTargets(
+              character,
+              characterCenterX,
+              centerY,
+              fontSize,
+              characterIndex
+            );
+
+            phraseTargets.push(...characterTargets.map((target) => ({
+              ...target,
+              y: centerY + (target.y - centerY) * textVerticalScale
+            })));
+          }
+
+          cursorX += advance + letterSpacing;
+        });
+
+        return phraseTargets;
+      }
+
+      function createTextParticle(target, index, sequenceStart) {
+        const brightness = 1;
+        const horizontalSpread = Math.min(150, width * 0.18);
+
+        return {
+          x: target.x + randomBetween(-horizontalSpread, horizontalSpread),
+          y: randomBetween(-height * 0.5, -textParticleSize),
+          tx: target.x,
+          ty: target.y,
+          vx: randomBetween(-0.8, 0.8),
+          vy: randomBetween(0.4, 1.8),
+          brightness,
+          targetBrightness: brightness,
+          released: false,
+          releaseAt: sequenceStart + index * (26 / 3),
+          offsetX: 0,
+          offsetY: 0,
+          targetOffsetX: 0,
+          targetOffsetY: 0,
+          nextOffsetAt: randomBetween(0, 900),
+          nextBrightnessAt: randomBetween(0, 1200)
+        };
+      }
+
+      function chooseNextTextOffset(particle, strength = 1, timestamp = performance.now()) {
+        const range = textGridSize * 0.5 * strength;
+        particle.targetOffsetX = Math.floor(randomBetween(-range, range));
+        particle.targetOffsetY = Math.floor(randomBetween(-range, range));
+        particle.nextOffsetAt = timestamp + randomBetween(650, 1800);
+      }
+
+      function chooseNextTextBrightness(particle, timestamp) {
+        particle.targetBrightness = 1;
+        particle.nextBrightnessAt = timestamp + randomBetween(320, 1500);
+      }
+
+      function refreshTextOffsets(strength = 1) {
+        const timestamp = performance.now();
+        for (const particle of textParticles) {
+          if (particle.released) {
+            chooseNextTextOffset(particle, strength, timestamp);
+          }
+        }
+      }
+
+      function scatterTextParticles(strength = 1) {
+        if (!textPrintingStarted) return;
+
+        for (const particle of textParticles) {
+          if (!particle.released) continue;
+
+          const angle = Math.random() * Math.PI * 2;
+          const impulse = randomBetween(2.5, 7.5) * strength;
+          particle.vx += Math.cos(angle) * impulse;
+          particle.vy += Math.sin(angle) * impulse;
+          chooseNextTextBrightness(particle, performance.now());
+        }
+
+        refreshTextOffsets(2.4);
+      }
+
+      function startTextPrinting() {
+        textPrintingStarted = true;
+
+        const shortSide = Math.min(width, height);
+        const originalGrid = Math.max(17, Math.min(30, Math.round(shortSide / 40)));
+        const baseGridSize = Math.max(4, Math.round(originalGrid * 1.08 * (1 / 3)));
+        const baseParticleSize = originalGrid * 2 * (1 / 3);
+        const targetParticleSize = getBackgroundMaximumParticleSize() * 0.3;
+        const textScale = targetParticleSize / baseParticleSize;
+
+        textParticleSize = targetParticleSize;
+        textGridSize = baseGridSize * textScale;
+
+        const firstLayout = findTextLayout("By square", true);
+        const secondLayout = findTextLayout("a simple desion", true);
+        let fontSize = Math.min(firstLayout.fontSize, secondLayout.fontSize)
+          * (1 / 3)
+          * textScale;
+
+        textMaskCtx.font = `800 ${fontSize}px ${textFontFamily}`;
+        const secondWidth = textMaskCtx.measureText("a simple desion").width;
+        fontSize = Math.max(12, fontSize);
+        const secondCenterX = Math.max(
+          width / 2,
+          Math.min(width * 0.66, width - secondWidth / 2 - width * 0.03)
+        );
+
+        const firstTargets = samplePhraseTargets(
+          "By square",
+          width / 2,
+          Math.max(fontSize * 0.9, height * 0.17),
+          fontSize
+        );
+        const secondTargets = samplePhraseTargets(
+          "a simple desion",
+          secondCenterX,
+          height / 2,
+          fontSize
+        );
+
+        const firstStart = performance.now() + 220;
+        const secondStart = firstStart + firstTargets.length * (26 / 3) + 1050;
+
+        textParticles = [
+          ...firstTargets.map((target, index) => {
+            return createTextParticle(target, index, firstStart);
+          }),
+          ...secondTargets.map((target, index) => {
+            return createTextParticle(target, index, secondStart);
+          })
+        ];
+      }
+
+      function drawTextParticles(timestamp, delta) {
+        particleCtx.fillStyle = "#fff";
+        const pointerRadius = Math.max(72, textGridSize * 9);
+
+        for (const particle of textParticles) {
+          if (!particle.released) {
+            if (timestamp < particle.releaseAt) continue;
+            particle.released = true;
+            particle.nextOffsetAt = timestamp + randomBetween(650, 1800);
+            particle.nextBrightnessAt = timestamp + randomBetween(320, 1500);
+          }
+
+          if (timestamp >= particle.nextOffsetAt) {
+            chooseNextTextOffset(particle, 1, timestamp);
+          }
+          if (timestamp >= particle.nextBrightnessAt) {
+            chooseNextTextBrightness(particle, timestamp);
+          }
+
+          particle.vx += (particle.tx - particle.x) * 0.026 * delta;
+          particle.vy += (particle.ty - particle.y) * 0.026 * delta;
+
+          if (textPointer.active) {
+            const dx = particle.x - textPointer.x;
+            const dy = particle.y - textPointer.y;
+            const distance = Math.hypot(dx, dy) || 1;
+
+            if (distance < pointerRadius) {
+              const force = (1 - distance / pointerRadius) * 1.45;
+              particle.vx += (dx / distance) * force * delta;
+              particle.vy += (dy / distance) * force * delta;
+            }
+          }
+
+          particle.vx *= Math.pow(0.9, delta);
+          particle.vy *= Math.pow(0.9, delta);
+          particle.x += particle.vx * delta;
+          particle.y += particle.vy * delta;
+          particle.offsetX += (particle.targetOffsetX - particle.offsetX) * 0.085 * delta;
+          particle.offsetY += (particle.targetOffsetY - particle.offsetY) * 0.085 * delta;
+          particle.brightness += (
+            particle.targetBrightness - particle.brightness
+          ) * 0.045 * delta;
+
+          particleCtx.globalAlpha = 1;
+          particleCtx.fillRect(
+            Math.round(particle.x + particle.offsetX - textParticleSize / 2),
+            Math.round(particle.y + particle.offsetY - textParticleSize / 2),
+            textParticleSize,
+            textParticleSize
+          );
+        }
+
+        particleCtx.globalAlpha = 1;
+      }
+
+      function drawParticles(time, delta) {
+        particleCtx.clearRect(0, 0, width, height);
+
+        for (const particle of particles) {
+          const level = levels[particle.levelIndex];
+          const breathing = 1 + Math.sin(
+            time * 0.0017 * particle.breathSpeed + particle.phase
+          ) * level.pulse;
+          const size = particle.size * 1.15 * level.scale * breathing;
+          particle.currentSize = size;
+          const [minAlpha, maxAlpha] = level.alpha;
+
+          particleCtx.globalAlpha = Math.min(
+            0.82,
+            (minAlpha + particle.alphaMix * (maxAlpha - minAlpha)) * backgroundStyle.alphaBoost
+          );
+
+          if (particle.outline) {
+            particleCtx.strokeStyle = backgroundStyle.palette[particle.levelIndex];
+            particleCtx.lineWidth = 1;
+            particleCtx.strokeRect(particle.x, particle.y, size, size);
+          } else {
+            particleCtx.fillStyle = backgroundStyle.palette[particle.levelIndex];
+            particleCtx.fillRect(particle.x, particle.y, size, size);
+          }
+        }
+
+        particleCtx.globalAlpha = 1;
+        maskParticlesBehindBlock();
+        drawTextParticles(time, delta);
+      }
+
+      function drawScene(time, delta = 1) {
+        drawGlow();
+        drawParticles(time, delta);
+      }
+
+      function animateBackground(time) {
+        const delta = Math.min((time - lastFrameTime) / 16.67 || 1, 2);
+        lastFrameTime = time;
+        drawBlockParticles();
+        drawScene(time, delta);
+        requestAnimationFrame(animateBackground);
+      }
+
+      function playPressAnimation() {
+        collisionApplied = false;
+        textPrintingStarted = false;
+        textParticles = [];
+        openBlock.style.pointerEvents = "auto";
+        openBlock.classList.remove("is-pressed");
+        document.body.classList.remove("is-opening");
+        void openBlock.offsetWidth;
+        openBlock.classList.add("is-pressed");
+        document.body.classList.add("is-opening");
+      }
+
+      function resizePage() {
+        centerOpenBlock();
+        resizeBlockParticles();
+        resizeParticleBackground();
+      }
+
+      addEventListener("resize", resizePage);
+      openBlock.addEventListener("pointerdown", playPressAnimation);
+      openBlock.addEventListener("animationend", (event) => {
+        if (event.animationName === "particle-collision-timer") {
+          removeParticlesOverlappingBlock();
+          startTextPrinting();
+          openBlock.style.pointerEvents = "none";
+        }
+      });
+      openBlock.addEventListener("keydown", (event) => {
+        if ((event.key === "Enter" || event.key === " ") && !event.repeat) {
+          event.preventDefault();
+          playPressAnimation();
+        }
+      });
+
+      addEventListener("pointermove", (event) => {
+        textPointer.x = event.clientX;
+        textPointer.y = event.clientY;
+        textPointer.active = true;
+      });
+      addEventListener("pointerdown", () => {
+        scatterTextParticles(1);
+      });
+      document.documentElement.addEventListener("pointerleave", () => {
+        textPointer.active = false;
+      });
+
+      resizePage();
+      drawBlockParticles();
+      drawScene(0);
+      requestAnimationFrame(animateBackground);
+    </script>
+  </body>
+</html>
