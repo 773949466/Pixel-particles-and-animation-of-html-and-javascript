@@ -8,6 +8,10 @@
 像素粒子波浪预览：
 <img width="1185" height="561" alt="波浪" src="https://github.com/user-attachments/assets/74cc9cf7-ce1e-4e7d-a33b-5678f09f8103" />
 
+像素粒子文字预览：
+<img width="1208" height="443" alt="kskcl" src="https://github.com/user-attachments/assets/f99c1293-e3b9-460b-af21-e7c5771538dc" />
+
+
 像素粒子图片应用：
 <img width="238" height="213" alt="1" src="https://github.com/user-attachments/assets/cc52aa09-7512-4ccd-972a-0e7b08d8da43" /><img width="1185" height="561" alt="图片" src="https://github.com/user-attachments/assets/b8a37457-24de-4205-9ef0-a6527980ff1b" />
 
